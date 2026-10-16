@@ -2,19 +2,16 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>T-Anim Workbench MVP v0.1</title>
+<title>T-Anim Workbench MVP v0.2</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: system-ui, -apple-system, sans-serif; background: #1e1e1e; color: #ddd; height: 100vh; display: flex; flex-direction: column; }
-
 /* 顶部布局 */
 .main { flex: 1; display: flex; overflow: hidden; }
-
 /* 左侧面板 */
 .sidebar { width: 320px; background: #252526; border-right: 1px solid #333; display: flex; flex-direction: column; }
 .sidebar-section { padding: 12px; border-bottom: 1px solid #333; }
 .sidebar h3 { font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #ccc; }
-
 #codeInput {
   width: 100%; height: 180px; background: #1e1e1e; color: #d4d4d4; border: 1px solid #3c3c3c;
   padding: 8px; font-family: Consolas, monospace; font-size: 12px; resize: vertical;
@@ -24,36 +21,75 @@ body { font-family: system-ui, -apple-system, sans-serif; background: #1e1e1e; c
   border: none; border-radius: 2px; cursor: pointer; font-size: 12px;
 }
 #parseBtn:hover { background: #1177bb; }
-
 /* 参数面板 */
 #paramPanel { flex: 1; overflow-y: auto; }
 .param-item { margin-bottom: 10px; }
 .param-label { font-size: 11px; color: #9cdcfe; margin-bottom: 4px; display: flex; justify-content: space-between; }
 .param-label .value { color: #ce9178; font-family: Consolas, monospace; }
 .param-slider { width: 100%; }
-
+.warning {
+  font-size: 10px;
+  color: #f44747;
+  margin-top: 4px;
+  line-height: 1.2;
+}
+.constraint-warn {
+  font-size: 10px;
+  color: #dcdcaa;
+  margin-top: 2px;
+}
 /* 画布区域 */
 .canvas-wrap { flex: 1; display: flex; align-items: center; justify-content: center; background: #1a1a1a; }
 #canvas { background: #f3f1ec; box-shadow: 0 0 20px rgba(0,0,0,0.3); }
-
 /* 底部时间轴 */
 .timeline {
   height: 60px; background: #252526; border-top: 1px solid #333;
   display: flex; align-items: center; padding: 0 16px; gap: 12px;
+  position: relative;
 }
 #playBtn {
   padding: 4px 12px; background: #0e639c; color: #fff; border: none;
   border-radius: 2px; cursor: pointer; font-size: 12px;
 }
-#timeSlider { flex: 1; }
+#timeSlider { flex: 1; position: relative; z-index: 1; }
 #timeDisplay { font-family: Consolas, monospace; font-size: 12px; color: #ce9178; min-width: 50px; text-align: right; }
-
+/* 时间轴标记层 */
+.time-marker-layer {
+  position: absolute;
+  left: 68px;
+  right: 72px;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+.time-marker {
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  width: 2px;
+  background: #ff9500;
+  pointer-events: all;
+  cursor: ew-resize;
+  transform: translateX(-50%);
+}
+.time-marker-label {
+  position: absolute;
+  top: -16px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 10px;
+  color: #ff9500;
+  white-space: nowrap;
+  background: #252526;
+  padding: 1px 3px;
+  border-radius: 2px;
+}
 .status { font-size: 11px; color: #6a9955; margin-top: 6px; }
-.error { color: #f44747; }
+.status.error { color: #f44747; }
 </style>
 </head>
 <body>
-
 <div class="main">
   <!-- 左侧控制面板 -->
   <div class="sidebar">
@@ -68,20 +104,21 @@ body { font-family: system-ui, -apple-system, sans-serif; background: #1e1e1e; c
       <div style="font-size:11px;color:#888;">解析代码后自动生成</div>
     </div>
   </div>
-
   <!-- 画布预览区 -->
   <div class="canvas-wrap">
     <canvas id="canvas" width="800" height="500"></canvas>
   </div>
 </div>
-
 <!-- 底部时间轴 -->
 <div class="timeline">
   <button id="playBtn">播放</button>
+  <div id="timeMarkerLayer" class="time-marker-layer"></div>
   <input type="range" id="timeSlider" min="0" max="10" step="0.01" value="0">
-  <div id="timeDisplay">0.00s</div>
+  <div style="text-align: right;">
+    <div id="contentDuration" style="font-size: 10px; color: #888; margin-bottom: 2px;">内容时长: 3.00s</div>
+    <div id="timeDisplay">0.00s</div>
+  </div>
 </div>
-
 <script>
 // ============= 内置标准函数库 v0.1（与规范完全一致） =============
 function prog(t, start, end) {
@@ -89,7 +126,6 @@ function prog(t, start, end) {
   if (t > end) return 1;
   return (t - start) / (end - start);
 }
-
 function fade(t, start, end, inDur, outDur) {
   if (t < start) return 0;
   if (t > end + outDur) return 0;
@@ -97,9 +133,19 @@ function fade(t, start, end, inDur, outDur) {
   if (t > end) return (end + outDur - t) / outDur;
   return 1;
 }
-
 function easeParabola(x) {
   return 1 - (2 * x - 1) * (2 * x - 1);
+}
+
+// ============= 更新内容时长显示 =============
+function updateContentDuration() {
+  const timeParams = params.filter(p => p.type === 'time');
+  if (timeParams.length === 0) {
+    document.getElementById('contentDuration').textContent = '内容时长: 0.00s';
+    return;
+  }
+  const maxTime = Math.max(...timeParams.map(p => p.value));
+  document.getElementById('contentDuration').textContent = `内容时长: ${maxTime.toFixed(2)}s`;
 }
 
 // ============= 全局状态 =============
@@ -112,15 +158,20 @@ const playBtn = document.getElementById('playBtn');
 const timeSlider = document.getElementById('timeSlider');
 const timeDisplay = document.getElementById('timeDisplay');
 const statusEl = document.getElementById('status');
-
-let params = [];       // 参数列表 [{name, type, label, min, max, value}]
+const timeMarkerLayer = document.getElementById('timeMarkerLayer');
+let params = [];      // 参数列表 [{name, type, label, min, max, value}]
+let constraints = [];   // 约束列表 [{left, op, right}]
 let drawFrame = null;  // 当前渲染函数
 let t = 0;             // 全局时间
 let playing = false;
 const FPS = 30;
 let lastTime = 0;
+// 拖拽状态
+let draggingIndex = -1;
+let dragStartX = 0;
+let dragStartValue = 0;
 
-// ============= 参数解析器 =============
+// ============= 参数解析器（增加约束解析） =============
 function parseParams(code) {
   const regex = /@param\s*\{\s*(\w+)\s*\}\s+(\w+)\s+([^|]+?)\s*\|\s*range\s*:\s*([\d.]+)\s*~\s*([\d.]+)\s*\|\s*default\s*:\s*([\d.]+)/g;
   const result = [];
@@ -132,7 +183,19 @@ function parseParams(code) {
       label: match[3].trim(),
       min: parseFloat(match[4]),
       max: parseFloat(match[5]),
-      value: parseFloat(match[6])
+      value: parseFloat(match[6]),
+      warning: null
+    });
+  }
+
+  // 解析约束规则
+  const constraintRegex = /@constraint\s+(\w+)\s*(>=|<=|>|<)\s*(\w+)/g;
+  constraints = [];
+  while ((match = constraintRegex.exec(code)) !== null) {
+    constraints.push({
+      left: match[1],
+      op: match[2],
+      right: match[3]
     });
   }
 
@@ -148,20 +211,46 @@ function parseParams(code) {
     });
   }
 
+  // 初始执行一次约束校验
+  applyAllConstraints(result);
   return result;
 }
 
+// ============= 执行所有约束校验 =============
+function applyAllConstraints(paramList) {
+  let changed = true;
+  // 循环执行直到稳定，避免连锁约束
+  while (changed) {
+    changed = false;
+    constraints.forEach(c => {
+      const leftParam = paramList.find(p => p.name === c.left);
+      const rightParam = paramList.find(p => p.name === c.right);
+      if (!leftParam || !rightParam) return;
+
+      if (c.op === '>=' || c.op === '>') {
+        if (leftParam.value < rightParam.value) {
+          leftParam.value = rightParam.value;
+          changed = true;
+        }
+      }
+      if (c.op === '<=' || c.op === '<') {
+        if (leftParam.value > rightParam.value) {
+          leftParam.value = rightParam.value;
+          changed = true;
+        }
+      }
+    });
+  }
+}
 
 // ============= 构建渲染函数 =============
 function buildDrawFrame(code, params) {
   let processedCode = code;
-
   // 自动修复：移除函数内部对参数变量的声明，避免重复声明报错
   params.forEach(p => {
     const redefRegex = new RegExp(`(?:const|let|var)\\s+${p.name}\\s*=\\s*[^;]+;?`, 'g');
     processedCode = processedCode.replace(redefRegex, '');
   });
-
   const paramNames = params.map(p => p.name);
   const paramValues = params.map(p => p.value);
   
@@ -169,7 +258,6 @@ function buildDrawFrame(code, params) {
     'ctx', 'canvas', 't', 'prog', 'fade', 'easeParabola', ...paramNames,
     processedCode + '\n return drawFrame;'
   );
-
   try {
     return fn(ctx, canvas, 0, prog, fade, easeParabola, ...paramValues);
   } catch (e) {
@@ -179,6 +267,34 @@ function buildDrawFrame(code, params) {
   }
 }
 
+// ============= 更新单个标记位置 =============
+function updateMarkerPosition(paramIndex) {
+  const marker = timeMarkerLayer.querySelector(`.time-marker[data-index="${paramIndex}"]`);
+  if (!marker) return;
+  const timelineMax = parseFloat(timeSlider.max);
+  const percent = params[paramIndex].value / timelineMax;
+  marker.style.left = (percent * 100) + '%';
+}
+
+// ============= 更新单个参数滑块 =============
+function updateParamSlider(index) {
+  const sliders = paramPanel.querySelectorAll('.param-slider');
+  const labels = paramPanel.querySelectorAll('.param-label .value');
+  if (!sliders[index]) return;
+  sliders[index].value = params[index].value;
+  labels[index].textContent = params[index].value.toFixed(2);
+}
+
+// ============= 同步所有参数UI =============
+function syncAllParamUI() {
+  params.forEach((p, idx) => {
+    updateParamSlider(idx);
+    if (p.type === 'time') {
+      updateMarkerPosition(idx);
+    }
+  });
+  updateContentDuration();
+}
 
 // ============= 生成参数面板控件 =============
 function renderParamPanel() {
@@ -189,7 +305,7 @@ function renderParamPanel() {
     
     const label = document.createElement('div');
     label.className = 'param-label';
-    label.innerHTML = `<span>${p.label}</span><span class="value">${p.value}</span>`;
+    label.innerHTML = `<span>${p.label}</span><span class="value">${p.value.toFixed(2)}</span>`;
     
     const slider = document.createElement('input');
     slider.type = 'range';
@@ -202,27 +318,88 @@ function renderParamPanel() {
     slider.addEventListener('input', () => {
       params[idx].value = parseFloat(slider.value);
       label.querySelector('.value').textContent = params[idx].value.toFixed(2);
+      
+      // 应用约束校验
+      applyAllConstraints(params);
+      // 同步所有UI
+      syncAllParamUI();
+
       // 重新构建渲染函数（应用新参数值）
       drawFrame = buildDrawFrame(codeInput.value, params);
       render();
     });
     
     item.appendChild(label);
-
     // ===== 参数重定义警告 =====
     if (p.warning) {
       const warn = document.createElement('div');
-      warn.style.fontSize = '10px';
-      warn.style.color = '#f44747';
-      warn.style.marginTop = '2px';
+      warn.className = 'warning';
       warn.textContent = p.warning;
       item.appendChild(warn);
     }
     // ========================
-
     item.appendChild(slider);
     paramPanel.appendChild(item);
   });
+}
+
+// ============= 渲染时间轴标记 =============
+function renderTimeMarkers() {
+  timeMarkerLayer.innerHTML = '';
+  const timelineMax = parseFloat(timeSlider.max);
+  params.forEach((p, idx) => {
+    if (p.type !== 'time') return;
+    const marker = document.createElement('div');
+    marker.className = 'time-marker';
+    const percent = p.value / timelineMax;
+    marker.style.left = (percent * 100) + '%';
+    marker.dataset.index = idx;
+    const label = document.createElement('div');
+    label.className = 'time-marker-label';
+    label.textContent = p.label;
+    marker.appendChild(label);
+    // 鼠标按下开始拖拽
+    marker.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      draggingIndex = idx;
+      dragStartX = e.clientX;
+      dragStartValue = p.value;
+      
+      document.addEventListener('mousemove', onDragMarker);
+      document.addEventListener('mouseup', endDragMarker);
+    });
+    timeMarkerLayer.appendChild(marker);
+  });
+}
+
+// ============= 拖拽标记处理 =============
+function onDragMarker(e) {
+  if (draggingIndex === -1) return;
+  
+  const layerRect = timeMarkerLayer.getBoundingClientRect();
+  const dx = e.clientX - dragStartX;
+  const timelineMax = parseFloat(timeSlider.max);
+  const valueDelta = (dx / layerRect.width) * timelineMax;
+  
+  let newValue = dragStartValue + valueDelta;
+  // 限制在参数的 min/max 范围内
+  newValue = Math.max(params[draggingIndex].min, Math.min(params[draggingIndex].max, newValue));
+  
+  params[draggingIndex].value = newValue;
+
+  // 应用约束校验
+  applyAllConstraints(params);
+  // 同步所有UI
+  syncAllParamUI();
+
+  // 重新渲染画面
+  drawFrame = buildDrawFrame(codeInput.value, params);
+  render();
+}
+function endDragMarker() {
+  draggingIndex = -1;
+  document.removeEventListener('mousemove', onDragMarker);
+  document.removeEventListener('mouseup', endDragMarker);
 }
 
 // ============= 渲染单帧 =============
@@ -242,14 +419,12 @@ function loop(now) {
   if (!lastTime) lastTime = now;
   const delta = (now - lastTime) / 1000;
   lastTime = now;
-
   if (playing) {
     t += delta;
     if (t > parseFloat(timeSlider.max)) t = 0;
     timeSlider.value = t;
     render();
   }
-
   requestAnimationFrame(loop);
 }
 
@@ -261,15 +436,25 @@ parseBtn.addEventListener('click', () => {
   if (params.length === 0) {
     statusEl.textContent = '未识别到参数，请检查 @param 注释格式';
     statusEl.className = 'status error';
+    renderParamPanel();
+    renderTimeMarkers();
+    updateContentDuration();
     return;
   }
-
   drawFrame = buildDrawFrame(code, params);
-  if (!drawFrame) return;
-
+  if (!drawFrame) {
+    renderParamPanel();
+    renderTimeMarkers();
+    updateContentDuration();
+    return;
+  }
   renderParamPanel();
+  renderTimeMarkers();
+  updateContentDuration();
   render();
-  statusEl.textContent = `成功解析 ${params.length} 个参数`;
+  
+  const hasWarning = params.some(p => p.warning);
+  statusEl.textContent = `成功解析 ${params.length} 个参数${hasWarning ? '（含警告）' : ''}`;
   statusEl.className = 'status';
 });
 
@@ -284,36 +469,32 @@ timeSlider.addEventListener('input', () => {
   render();
 });
 
-// ============= 默认加载示例代码 =============
+// ============= 默认加载示例代码（增加约束声明） =============
 const demoCode = `// @param {number} jumpHeight 弹跳高度 | range: 0~200 | default: 120
-// @param {number} jumpStart 起跳时间 | range: 0~5 | default: 1.0
-// @param {number} jumpEnd 落地时间 | range: 0~5 | default: 2.2
-// @param {number} smileTime 表情切换时间 | range: 0~5 | default: 3.0
+// @param {time} jumpStart 起跳时间 | range: 0~5 | default: 1.0
+// @param {time} jumpEnd 落地时间 | range: 0~5 | default: 2.2
+// @param {time} smileTime 表情切换时间 | range: 0~5 | default: 3.0
+// @constraint jumpEnd >= jumpStart
 
 function drawFrame(t) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-
   const baseY = 350;
   const cx = 400;
-
   // 计算弹跳位移
   const p = prog(t, jumpStart, jumpEnd);
   const lift = easeParabola(p) * jumpHeight;
   const cy = baseY - lift;
-
   // 绘制方块身体
   ctx.fillStyle = '#e6703b';
   ctx.fillRect(cx - 100, cy - 60, 200, 100);
   ctx.strokeStyle = '#222';
   ctx.lineWidth = 2;
   ctx.strokeRect(cx - 100, cy - 60, 200, 100);
-
   // 绘制腿
   ctx.fillRect(cx - 80, cy + 40, 22, 40);
   ctx.fillRect(cx - 20, cy + 40, 22, 40);
   ctx.fillRect(cx + 30, cy + 40, 22, 40);
   ctx.fillRect(cx + 90, cy + 40, 22, 40);
-
   // 绘制眼睛，t >= smileTime 切换为弯眼
   if (t >= smileTime) {
     ctx.beginPath();
@@ -326,7 +507,6 @@ function drawFrame(t) {
     ctx.arc(cx + 40, cy - 25, 10, 0, Math.PI * 2);
     ctx.fill();
   }
-
   // 绘制地面
   ctx.beginPath();
   ctx.moveTo(100, baseY + 80);
@@ -337,7 +517,6 @@ function drawFrame(t) {
 codeInput.value = demoCode;
 // 自动解析默认示例
 parseBtn.click();
-
 // 启动渲染循环
 requestAnimationFrame(loop);
 </script>
