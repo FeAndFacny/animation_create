@@ -122,7 +122,7 @@ let lastTime = 0;
 
 // ============= 参数解析器 =============
 function parseParams(code) {
-  const regex = /\/\/ @param \{(\w+)\} (\w+) (.+?) \| range: ([\d.]+)~([\d.]+) \| default: ([\d.]+)/g;
+  const regex = /@param\s*\{\s*(\w+)\s*\}\s+(\w+)\s+([^|]+?)\s*\|\s*range\s*:\s*([\d.]+)\s*~\s*([\d.]+)\s*\|\s*default\s*:\s*([\d.]+)/g;
   const result = [];
   let match;
   while ((match = regex.exec(code)) !== null) {
@@ -135,18 +135,39 @@ function parseParams(code) {
       value: parseFloat(match[6])
     });
   }
+
+  // 检测函数内部是否重定义参数
+  const drawFrameMatch = code.match(/function drawFrame\(t\)\s*\{([\s\S]*)\}/);
+  if (drawFrameMatch) {
+    const body = drawFrameMatch[1];
+    result.forEach(p => {
+      const redefRegex = new RegExp(`(?:const|let|var)\\s+${p.name}\\s*=`, 'm');
+      if (redefRegex.test(body)) {
+        p.warning = `警告：函数内部重定义了 ${p.name}，调参将无效`;
+      }
+    });
+  }
+
   return result;
 }
 
+
 // ============= 构建渲染函数 =============
 function buildDrawFrame(code, params) {
+  let processedCode = code;
+
+  // 自动修复：移除函数内部对参数变量的声明，避免重复声明报错
+  params.forEach(p => {
+    const redefRegex = new RegExp(`(?:const|let|var)\\s+${p.name}\\s*=\\s*[^;]+;?`, 'g');
+    processedCode = processedCode.replace(redefRegex, '');
+  });
+
   const paramNames = params.map(p => p.name);
   const paramValues = params.map(p => p.value);
   
-  // 构造函数：注入内置函数 + 参数变量 + 画布上下文
   const fn = new Function(
     'ctx', 'canvas', 't', 'prog', 'fade', 'easeParabola', ...paramNames,
-    code + '\n return drawFrame;'
+    processedCode + '\n return drawFrame;'
   );
 
   try {
@@ -157,6 +178,7 @@ function buildDrawFrame(code, params) {
     return null;
   }
 }
+
 
 // ============= 生成参数面板控件 =============
 function renderParamPanel() {
@@ -186,6 +208,18 @@ function renderParamPanel() {
     });
     
     item.appendChild(label);
+
+    // ===== 参数重定义警告 =====
+    if (p.warning) {
+      const warn = document.createElement('div');
+      warn.style.fontSize = '10px';
+      warn.style.color = '#f44747';
+      warn.style.marginTop = '2px';
+      warn.textContent = p.warning;
+      item.appendChild(warn);
+    }
+    // ========================
+
     item.appendChild(slider);
     paramPanel.appendChild(item);
   });
