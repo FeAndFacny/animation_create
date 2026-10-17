@@ -25,8 +25,33 @@ body { font-family: system-ui, -apple-system, sans-serif; background: #1e1e1e; c
 .param-label .value { color: #ce9178; font-family: Consolas, monospace; }
 .param-slider { width: 100%; }
 .warning { font-size: 10px; color: #f44747; margin-top: 4px; line-height: 1.2; }
+
+.supplement-panel { margin-top: 12px; border-top: 1px solid #333; padding-top: 10px; }
+.supplement-header {
+  font-size: 12px; font-weight: 600; color: #aaa; margin-bottom: 8px; cursor: pointer;
+  display: flex; justify-content: space-between; align-items: center; user-select: none;
+}
+.supplement-header:hover { color: #ccc; }
+.supplement-tip { font-size: 10px; color: #666; font-weight: normal; }
+.supplement-arrow { transition: transform 0.2s; font-size: 10px; }
+.supplement-arrow.collapsed { transform: rotate(-90deg); }
+.supplement-content { overflow: hidden; }
+.supplement-content.collapsed { display: none; }
+.bubble-param-item { margin-bottom: 10px; }
+.bubble-param-label { font-size: 11px; color: #9cdcfe; margin-bottom: 4px; display: flex; justify-content: space-between; }
+.bubble-param-label .value { color: #ce9178; font-family: Consolas, monospace; }
+.bubble-param-slider { width: 100%; }
+.bubble-param-checkbox { transform: scale(1.1); margin-left: 4px; }
+.panel-group-title {
+  font-size: 11px; color: #888; margin: 8px 0 4px 0; font-weight: 500;
+  border-bottom: 1px dashed #333; padding-bottom: 2px;
+}
+
 .canvas-wrap { flex: 1; display: flex; align-items: center; justify-content: center; background: #1a1a1a; }
-#canvas { background: #f3f1ec; box-shadow: 0 0 20px rgba(0,0,0,0.3); }
+#canvas { background: #f3f1ec; box-shadow: 0 0 20px rgba(0,0,0,0.3); cursor: default; }
+#canvas.obj-hover { cursor: move; }
+#canvas.obj-dragging { cursor: grabbing; }
+
 .timeline {
   height: 60px; background: #252526; border-top: 1px solid #333;
   display: flex; align-items: center; padding: 0 16px; gap: 12px; position: relative;
@@ -115,61 +140,140 @@ function easeInOut(x) {
   return x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2;
 }
 
+// ========== 坐标变换工具 ==========
+function matrixTransformPoint(matrix, x, y) {
+  return {
+    x: matrix.a * x + matrix.c * y + matrix.e,
+    y: matrix.b * x + matrix.d * y + matrix.f
+  };
+}
+
+// ========== 对象级拖拽系统 ==========
+const draggableObjects = {
+  bubble: {
+    id: 'bubble',
+    label: '气泡主体',
+    offsetX: 0,
+    offsetY: 0,
+    bounds: { left: 0, right: 0, top: 0, bottom: 0 },
+    visible: true
+  },
+  tail: {
+    id: 'tail',
+    label: '气泡尾巴',
+    bounds: { left: 0, right: 0, top: 0, bottom: 0 },
+    visible: true,
+    axisStart: { x: 0, y: 0 } // 尾巴轴线起点（全局画布坐标）
+  }
+};
+
+let draggingTarget = null;
+let dragStartMouseX = 0;
+let dragStartMouseY = 0;
+let dragStartOffsetX = 0;
+let dragStartOffsetY = 0;
+let dragStartTailAngle = 0;
+let dragStartTailLength = 0;
+let dragStartP1Dist = 0;
+let dragStartP2Dist = 0;
+let wasPlayingBeforeDrag = false;
+
+// ========== 全局气泡样式默认配置 ==========
+const bubbleDefaults = {
+  fillStyle: '#ffffff',
+  strokeStyle: '#333333',
+  lineWidth: 3,
+  cloudWidth: 1.0,
+  cloudHeight: 1.0,
+  bumpHeight: 0.25,
+  bumpCount: 7,
+  tailType: 'cloud',
+  tailSide: 'bottom',
+  tailSize: 1.0,
+  showDots: null,
+  showTail: true,
+  // ===== 新增：尾巴轴线参数 =====
+  tailAngle: 0,       // 尾巴角度偏移（度）
+  tailLength: 80,     // 尾巴轴线总长度
+  tailP1Dist: 26,     // 第一个圆距气泡起点距离
+  tailP2Dist: 62,     // 第二个圆距气泡起点距离
+  tailR1: 15,         // 第一个圆半径
+  tailR2: 11          // 第二个圆半径
+};
+
+const builtinBubbleParams = [
+  { group: '位置调整', name: 'bubbleX', label: '气泡水平位置', min: -200, max: 200, value: 0, step: 1, isInt: true, target: 'bubble', prop: 'offsetX' },
+  { group: '位置调整', name: 'bubbleY', label: '气泡垂直位置', min: -200, max: 200, value: 0, step: 1, isInt: true, target: 'bubble', prop: 'offsetY' },
+  
+  { group: '尾巴轴线', name: 'tailAngle', label: '尾巴角度', min: -80, max: 80, value: 0, step: 1, isInt: true },
+  { group: '尾巴轴线', name: 'tailLength', label: '尾巴总长度', min: 30, max: 150, value: 80, step: 1, isInt: true },
+  { group: '尾巴轴线', name: 'tailP1Dist', label: '小圆1距气泡', min: 10, max: 100, value: 26, step: 1, isInt: true },
+  { group: '尾巴轴线', name: 'tailP2Dist', label: '小圆2距气泡', min: 30, max: 140, value: 62, step: 1, isInt: true },
+  { group: '尾巴轴线', name: 'tailR1', label: '小圆1半径', min: 5, max: 25, value: 15, step: 1, isInt: true },
+  { group: '尾巴轴线', name: 'tailR2', label: '小圆2半径', min: 4, max: 20, value: 11, step: 1, isInt: true },
+
+  { group: '样式调整', name: 'cloudWidth', label: '云朵横向宽度', min: 0.7, max: 1.4, value: 1.0, step: 0.01 },
+  { group: '样式调整', name: 'cloudHeight', label: '云朵纵向高度', min: 0.6, max: 1.2, value: 1.0, step: 0.01 },
+  { group: '样式调整', name: 'bumpHeight', label: '云朵凸起幅度', min: 0.15, max: 0.4, value: 0.25, step: 0.01 },
+  { group: '样式调整', name: 'bumpCount', label: '云朵凸起瓣数', min: 5, max: 12, value: 7, step: 1, isInt: true },
+  { group: '样式调整', name: 'lineWidth', label: '描边粗细', min: 1, max: 8, value: 3, step: 0.5 },
+  { group: '样式调整', name: 'tailType', label: '尾巴类型:0=云朵 1=尖角 2=无', min: 0, max: 2, value: 0, step: 1, isInt: true, enum: ['cloud', 'point', 'none'] },
+  { group: '样式调整', name: 'tailSide', label: '尾巴方向:0=下 1=上 2=左 3=右', min: 0, max: 3, value: 0, step: 1, isInt: true, enum: ['bottom', 'top', 'left', 'right'] },
+  { group: '样式调整', name: 'showDots', label: '显示思考圆点', type: 'checkbox', value: true },
+  { group: '样式调整', name: 'showTail', label: '显示尾巴', type: 'checkbox', value: true }
+];
+
+let bubblePanelCollapsed = false;
+
 // ============= 内置标准绘制工具库 v0.2 =============
-// 统一气泡工具：不再区分 chat / thought，通过 options 切换造型
 function drawBubble(ctx, x, y, size, options) {
   options = options || {};
+  const fillStyle = options.fillStyle || bubbleDefaults.fillStyle;
+  const strokeStyle = options.strokeStyle || bubbleDefaults.strokeStyle;
+  const lineWidth = options.lineWidth || bubbleDefaults.lineWidth;
+  const cloudWidth = options.cloudWidth || bubbleDefaults.cloudWidth;
+  const cloudHeight = options.cloudHeight || bubbleDefaults.cloudHeight;
+  const bumpHeight = options.bumpHeight || bubbleDefaults.bumpHeight;
+  const bumpCount = Math.round(options.bumpCount || bubbleDefaults.bumpCount);
+  const tailType = options.tailType || bubbleDefaults.tailType;
+  const tailSide = options.tailSide || bubbleDefaults.tailSide;
+  const showTail = options.showTail !== undefined ? options.showTail : bubbleDefaults.showTail;
 
-  // 基础样式
-  const fillStyle = options.fillStyle || '#ffffff';
-  const strokeStyle = options.strokeStyle || '#333333';
-  const lineWidth = options.lineWidth || 3;
+  let showDots;
+  if (options.showDots !== undefined) {
+    showDots = options.showDots;
+  } else if (bubbleDefaults.showDots !== null) {
+    showDots = bubbleDefaults.showDots;
+  } else {
+    showDots = tailType === 'cloud';
+  }
 
-  // 云朵造型参数
-  const cloudWidth = options.cloudWidth || 1.0;
-  const cloudHeight = options.cloudHeight || 1.0;
-  const bumpHeight = options.bumpHeight || 0.25;
-  const bumpCount = options.bumpCount || 7;
-
-  // 尾巴类型：'cloud' 云朵双泡尾巴 | 'point' 尖角对话尾巴 | 'none' 无尾巴
-  const tailType = options.tailType || 'cloud';
-
-  // 尾巴位置：'bottom' | 'left' | 'right' | 'top'
-  const tailSide = options.tailSide || 'bottom';
-
-  // 尾巴大小
-  const tailSize = options.tailSize || 1.0;
-
-  // 内部三点：默认开启云朵气泡风格；尖角对话气泡默认关闭
-  const showDots = options.showDots !== undefined
-    ? options.showDots
-    : tailType === 'cloud';
+  // 气泡主体位置
+  const bubbleX = x + draggableObjects.bubble.offsetX;
+  const bubbleY = y + draggableObjects.bubble.offsetY;
 
   ctx.save();
-  ctx.translate(x, y);
+  ctx.translate(bubbleX, bubbleY);
   ctx.fillStyle = fillStyle;
   ctx.strokeStyle = strokeStyle;
   ctx.lineWidth = lineWidth;
   ctx.lineJoin = 'round';
 
-  // ---------- 气泡主体：基准椭圆 + 贝塞尔外凸波浪 ----------
   const baseRx = size * 0.6 * cloudWidth;
   const baseRy = size * 0.4 * cloudHeight;
   const bumpH = size * bumpHeight;
 
+  // ---------- 绘制气泡主体 ----------
   ctx.beginPath();
   for (let i = 0; i < bumpCount; i++) {
     const angleStart = (i / bumpCount) * Math.PI * 2 - Math.PI / 2;
     const angleEnd = ((i + 1) / bumpCount) * Math.PI * 2 - Math.PI / 2;
-
     const x1 = Math.cos(angleStart) * baseRx;
     const y1 = Math.sin(angleStart) * baseRy;
     const x2 = Math.cos(angleEnd) * baseRx;
     const y2 = Math.sin(angleEnd) * baseRy;
-
     const midAngle = (angleStart + angleEnd) / 2;
 
-    // 根据尾巴方向压低对应一侧，避免尾巴和云朵凸起打架
     let flatFactor = 1;
     if (tailSide === 'bottom' && midAngle > Math.PI / 4 && midAngle < Math.PI * 3 / 4) flatFactor = 0.7;
     if (tailSide === 'top' && midAngle > -Math.PI / 4 && midAngle < Math.PI / 4) flatFactor = 0.7;
@@ -179,7 +283,6 @@ function drawBubble(ctx, x, y, size, options) {
     const currentBump = bumpH * flatFactor;
     const cpx = Math.cos(midAngle) * (baseRx + currentBump);
     const cpy = Math.sin(midAngle) * (baseRy + currentBump);
-
     if (i === 0) ctx.moveTo(x1, y1);
     ctx.quadraticCurveTo(cpx, cpy, x2, y2);
   }
@@ -187,74 +290,137 @@ function drawBubble(ctx, x, y, size, options) {
   ctx.fill();
   ctx.stroke();
 
-  // ---------- 尾巴 ----------
-  if (tailType === 'cloud') {
-    const tail1R = size * 0.18 * tailSize;
-    const tail2R = size * 0.12 * tailSize;
-    let tail1X = 0, tail1Y = baseRy + tail1R * 0.4;
-    let tail2X = 0, tail2Y = tail1Y + tail1R * 0.7 + tail2R * 0.6;
+  // 记录气泡主体全局边界
+  const matrix = ctx.getTransform();
+  let localLeft = -(baseRx + bumpH);
+  let localRight = baseRx + bumpH;
+  let localTop = -(baseRy + bumpH);
+  let localBottom = baseRy + bumpH;
+  const p1 = matrixTransformPoint(matrix, localLeft, localTop);
+  const p2 = matrixTransformPoint(matrix, localRight, localBottom);
+  draggableObjects.bubble.bounds.left = p1.x;
+  draggableObjects.bubble.bounds.right = p2.x;
+  draggableObjects.bubble.bounds.top = p1.y;
+  draggableObjects.bubble.bounds.bottom = p2.y;
+  draggableObjects.bubble.visible = true;
 
-    if (tailSide === 'top') {
-      tail1Y = -baseRy - tail1R * 0.4;
-      tail2Y = tail1Y - tail1R * 0.7 - tail2R * 0.6;
-    }
-    if (tailSide === 'left') {
-      tail1X = -baseRx - tail1R * 0.4;
-      tail1Y = 0;
-      tail2X = tail1X - tail1R * 0.7 - tail2R * 0.6;
-      tail2Y = 0;
-    }
-    if (tailSide === 'right') {
-      tail1X = baseRx + tail1R * 0.4;
-      tail1Y = 0;
-      tail2X = tail1X + tail1R * 0.7 + tail2R * 0.6;
-      tail2Y = 0;
-    }
+  // ---------- 绘制尾巴（轴线驱动版） ----------
+  let tailDrawn = false;
+  if (showTail && tailType !== 'none') {
+    // 尾巴轴线起点：气泡边缘中心
+    let tailStartX = 0, tailStartY = 0;
+    // 基准方向向量
+    let baseDirX = 0, baseDirY = 1;
 
-    ctx.beginPath();
-    ctx.arc(tail1X, tail1Y, tail1R, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.arc(tail2X, tail2Y, tail2R, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-  } else if (tailType === 'point') {
-    const tipOffset = size * 0.55 * tailSize;
-    const width = size * 0.22 * tailSize;
-    const height = size * 0.32 * tailSize;
-
-    let tipX = 0, tipY = baseRy + tipOffset;
-    let leftX = -width, leftY = baseRy + height * 0.3;
-    let rightX = width, rightY = baseRy + height * 0.3;
-
-    if (tailSide === 'top') {
-      tipX = 0; tipY = -baseRy - tipOffset;
-      leftX = -width; leftY = -baseRy - height * 0.3;
-      rightX = width; rightY = -baseRy - height * 0.3;
-    }
-    if (tailSide === 'left') {
-      tipX = -baseRx - tipOffset; tipY = 0;
-      leftX = -baseRx - height * 0.3; leftY = -width;
-      rightX = -baseRx - height * 0.3; rightY = width;
-    }
-    if (tailSide === 'right') {
-      tipX = baseRx + tipOffset; tipY = 0;
-      leftX = baseRx + height * 0.3; leftY = -width;
-      rightX = baseRx + height * 0.3; rightY = width;
+    if (tailSide === 'bottom') {
+      tailStartY = baseRy;
+      baseDirX = 0; baseDirY = 1;
+    } else if (tailSide === 'top') {
+      tailStartY = -baseRy;
+      baseDirX = 0; baseDirY = -1;
+    } else if (tailSide === 'left') {
+      tailStartX = -baseRx;
+      baseDirX = -1; baseDirY = 0;
+    } else if (tailSide === 'right') {
+      tailStartX = baseRx;
+      baseDirX = 1; baseDirY = 0;
     }
 
-    ctx.beginPath();
-    ctx.moveTo(leftX, leftY);
-    ctx.lineTo(tipX, tipY);
-    ctx.lineTo(rightX, rightY);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
+    // 应用角度旋转
+    const angleRad = (bubbleDefaults.tailAngle * Math.PI) / 180;
+    const cos = Math.cos(angleRad);
+    const sin = Math.sin(angleRad);
+    const dirX = baseDirX * cos - baseDirY * sin;
+    const dirY = baseDirX * sin + baseDirY * cos;
+
+    // 计算两个圆在轴线上的位置
+    let p1x = tailStartX + dirX * bubbleDefaults.tailP1Dist;
+    let p1y = tailStartY + dirY * bubbleDefaults.tailP1Dist;
+    let p2x = tailStartX + dirX * bubbleDefaults.tailP2Dist;
+    let p2y = tailStartY + dirY * bubbleDefaults.tailP2Dist;
+
+    // ===== 强制两个圆不相交 =====
+    const minCenterDist = bubbleDefaults.tailR1 + bubbleDefaults.tailR2 + 3;
+    const dx = p2x - p1x;
+    const dy = p2y - p1y;
+    const dist = Math.hypot(dx, dy);
+    if (dist < minCenterDist && dist > 0.001) {
+      const scale = minCenterDist / dist;
+      p2x = p1x + dx * scale;
+      p2y = p1y + dy * scale;
+    }
+
+    if (tailType === 'cloud') {
+      // 绘制两个圆
+      ctx.beginPath();
+      ctx.arc(p1x, p1y, bubbleDefaults.tailR1, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(p2x, p2y, bubbleDefaults.tailR2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      // 记录尾巴边界
+      const tMinX = Math.min(p1x - bubbleDefaults.tailR1, p2x - bubbleDefaults.tailR2) - 4;
+      const tMaxX = Math.max(p1x + bubbleDefaults.tailR1, p2x + bubbleDefaults.tailR2) + 4;
+      const tMinY = Math.min(p1y - bubbleDefaults.tailR1, p2y - bubbleDefaults.tailR2) - 4;
+      const tMaxY = Math.max(p1y + bubbleDefaults.tailR1, p2y + bubbleDefaults.tailR2) + 4;
+      const tp1 = matrixTransformPoint(matrix, tMinX, tMinY);
+      const tp2 = matrixTransformPoint(matrix, tMaxX, tMaxY);
+      draggableObjects.tail.bounds.left = tp1.x;
+      draggableObjects.tail.bounds.right = tp2.x;
+      draggableObjects.tail.bounds.top = tp1.y;
+      draggableObjects.tail.bounds.bottom = tp2.y;
+
+      // 记录轴线起点全局坐标（用于拖拽计算）
+      const startGlobal = matrixTransformPoint(matrix, tailStartX, tailStartY);
+      draggableObjects.tail.axisStart.x = startGlobal.x;
+      draggableObjects.tail.axisStart.y = startGlobal.y;
+
+      tailDrawn = true;
+    } else if (tailType === 'point') {
+      // 尖角尾巴沿用轴线逻辑
+      const tipX = tailStartX + dirX * bubbleDefaults.tailLength;
+      const tipY = tailStartY + dirY * bubbleDefaults.tailLength;
+      const w = bubbleDefaults.tailR1 * 0.8;
+      const perpX = -dirY * w;
+      const perpY = dirX * w;
+      const leftX = tipX + perpX;
+      const leftY = tipY + perpY;
+      const rightX = tipX - perpX;
+      const rightY = tipY - perpY;
+
+      ctx.beginPath();
+      ctx.moveTo(leftX, leftY);
+      ctx.lineTo(tipX, tipY);
+      ctx.lineTo(rightX, rightY);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      const tMinX = Math.min(leftX, tipX, rightX) - 4;
+      const tMaxX = Math.max(leftX, tipX, rightX) + 4;
+      const tMinY = Math.min(leftY, tipY, rightY) - 4;
+      const tMaxY = Math.max(leftY, tipY, rightY) + 4;
+      const tp1 = matrixTransformPoint(matrix, tMinX, tMinY);
+      const tp2 = matrixTransformPoint(matrix, tMaxX, tMaxY);
+      draggableObjects.tail.bounds.left = tp1.x;
+      draggableObjects.tail.bounds.right = tp2.x;
+      draggableObjects.tail.bounds.top = tp1.y;
+      draggableObjects.tail.bounds.bottom = tp2.y;
+
+      const startGlobal = matrixTransformPoint(matrix, tailStartX, tailStartY);
+      draggableObjects.tail.axisStart.x = startGlobal.x;
+      draggableObjects.tail.axisStart.y = startGlobal.y;
+
+      tailDrawn = true;
+    }
   }
+  draggableObjects.tail.visible = tailDrawn;
 
-  // ---------- 内部三个思考圆点 ----------
+  // ---------- 内部思考圆点 ----------
   if (showDots) {
     const dotGap = size * 0.23;
     const dotRadius = size * 0.09;
@@ -355,7 +521,6 @@ function buildDrawFrame(code, params) {
   });
   const paramNames = params.map(p => p.name);
   const paramValues = params.map(p => p.value);
-
   const fn = new Function(
     'ctx', 'canvas', 't',
     'prog', 'fade', 'easeParabola', 'delay', 'sequence', 'easeOutBack', 'easeInOut',
@@ -382,7 +547,6 @@ function updateContentDuration() {
   const maxTime = Math.max(...timeParams.map(p => p.value));
   document.getElementById('contentDuration').textContent = `内容时长: ${maxTime.toFixed(2)}s`;
 }
-
 function updateMarkerPosition(paramIndex) {
   const marker = timeMarkerLayer.querySelector(`.time-marker[data-index="${paramIndex}"]`);
   if (!marker) return;
@@ -390,7 +554,6 @@ function updateMarkerPosition(paramIndex) {
   const percent = params[paramIndex].value / timelineMax;
   marker.style.left = (percent * 100) + '%';
 }
-
 function updateParamSlider(index) {
   const sliders = paramPanel.querySelectorAll('.param-slider');
   const labels = paramPanel.querySelectorAll('.param-label .value');
@@ -398,7 +561,6 @@ function updateParamSlider(index) {
   sliders[index].value = params[index].value;
   labels[index].textContent = params[index].value.toFixed(2);
 }
-
 function syncAllParamUI() {
   params.forEach((p, idx) => {
     updateParamSlider(idx);
@@ -407,6 +569,7 @@ function syncAllParamUI() {
   updateContentDuration();
 }
 
+// ========== 参数面板渲染 ==========
 function renderParamPanel() {
   paramPanel.innerHTML = '<h3>参数面板</h3>';
   params.forEach((p, idx) => {
@@ -440,6 +603,108 @@ function renderParamPanel() {
     item.appendChild(slider);
     paramPanel.appendChild(item);
   });
+
+  // 追加气泡补充参数面板
+  const declaredNames = params.map(p => p.name);
+  const supplementParams = builtinBubbleParams.filter(p => !declaredNames.includes(p.name));
+
+  if (supplementParams.length > 0) {
+    const panel = document.createElement('div');
+    panel.className = 'supplement-panel';
+
+    const header = document.createElement('div');
+    header.className = 'supplement-header';
+    header.innerHTML = `
+      <span>气泡样式补充参数 <span class="supplement-tip">（代码未指定时生效）</span></span>
+      <span class="supplement-arrow ${bubblePanelCollapsed ? 'collapsed' : ''}">▼</span>
+    `;
+    header.addEventListener('click', () => {
+      bubblePanelCollapsed = !bubblePanelCollapsed;
+      content.classList.toggle('collapsed');
+      header.querySelector('.supplement-arrow').classList.toggle('collapsed');
+    });
+
+    const content = document.createElement('div');
+    content.className = `supplement-content ${bubblePanelCollapsed ? 'collapsed' : ''}`;
+    content.id = 'supplementContent';
+
+    let currentGroup = '';
+    supplementParams.forEach(p => {
+      if (p.group && p.group !== currentGroup) {
+        currentGroup = p.group;
+        const groupTitle = document.createElement('div');
+        groupTitle.className = 'panel-group-title';
+        groupTitle.textContent = currentGroup;
+        content.appendChild(groupTitle);
+      }
+
+      const item = document.createElement('div');
+      item.className = 'bubble-param-item';
+      item.dataset.name = p.name;
+      const label = document.createElement('div');
+      label.className = 'bubble-param-label';
+
+      if (p.type === 'checkbox') {
+        label.innerHTML = `<span>${p.label}</span><span class="value" id="cb-label-${p.name}">${p.value ? '开' : '关'}</span>`;
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.className = 'bubble-param-checkbox';
+        checkbox.checked = !!p.value;
+        checkbox.addEventListener('change', () => {
+          bubbleDefaults[p.name] = checkbox.checked;
+          document.getElementById(`cb-label-${p.name}`).textContent = checkbox.checked ? '开' : '关';
+          render();
+        });
+        item.appendChild(label);
+        item.appendChild(checkbox);
+      } else {
+        const displayVal = p.isInt ? p.value : p.value.toFixed(2);
+        label.innerHTML = `<span>${p.label}</span><span class="value" id="supp-val-${p.name}">${displayVal}</span>`;
+        const slider = document.createElement('input');
+        slider.type = 'range';
+        slider.className = 'bubble-param-slider';
+        slider.id = `supp-slider-${p.name}`;
+        slider.min = p.min;
+        slider.max = p.max;
+        slider.step = p.step;
+        slider.value = p.value;
+        slider.addEventListener('input', () => {
+          let val = parseFloat(slider.value);
+          if (p.isInt) val = Math.round(val);
+          
+          if (p.target && p.prop) {
+            draggableObjects[p.target][p.prop] = val;
+          } else if (p.enum) {
+            bubbleDefaults[p.name] = p.enum[val];
+          } else {
+            bubbleDefaults[p.name] = val;
+          }
+          
+          document.getElementById(`supp-val-${p.name}`).textContent = p.isInt ? val : val.toFixed(2);
+          render();
+        });
+        item.appendChild(label);
+        item.appendChild(slider);
+      }
+
+      content.appendChild(item);
+    });
+
+    panel.appendChild(header);
+    panel.appendChild(content);
+    paramPanel.appendChild(panel);
+  }
+}
+
+// ========== 同步尾巴参数滑块 ==========
+function syncTailSliders() {
+  const params = ['tailAngle', 'tailLength', 'tailP1Dist', 'tailP2Dist', 'tailR1', 'tailR2'];
+  params.forEach(name => {
+    const slider = document.getElementById(`supp-slider-${name}`);
+    const label = document.getElementById(`supp-val-${name}`);
+    if (slider) slider.value = bubbleDefaults[name];
+    if (label) label.textContent = Math.round(bubbleDefaults[name]);
+  });
 }
 
 function renderTimeMarkers() {
@@ -467,7 +732,6 @@ function renderTimeMarkers() {
     timeMarkerLayer.appendChild(marker);
   });
 }
-
 function onDragMarker(e) {
   if (draggingIndex === -1) return;
   const layerRect = timeMarkerLayer.getBoundingClientRect();
@@ -482,12 +746,150 @@ function onDragMarker(e) {
   drawFrame = buildDrawFrame(codeInput.value, params);
   render();
 }
-
 function endDragMarker() {
   draggingIndex = -1;
   document.removeEventListener('mousemove', onDragMarker);
   document.removeEventListener('mouseup', endDragMarker);
 }
+
+// ========== 对象级画布拖拽逻辑 ==========
+function getCanvasMousePos(e) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  return {
+    x: (e.clientX - rect.left) * scaleX,
+    y: (e.clientY - rect.top) * scaleY
+  };
+}
+
+function pickDraggable(mx, my) {
+  // 优先检测尾巴
+  if (draggableObjects.tail.visible) {
+    const b = draggableObjects.tail.bounds;
+    if (mx >= b.left && mx <= b.right && my >= b.top && my <= b.bottom) {
+      return 'tail';
+    }
+  }
+  // 再检测气泡主体
+  if (draggableObjects.bubble.visible) {
+    const b = draggableObjects.bubble.bounds;
+    if (mx >= b.left && mx <= b.right && my >= b.top && my <= b.bottom) {
+      return 'bubble';
+    }
+  }
+  return null;
+}
+
+canvas.addEventListener('mousedown', (e) => {
+  const pos = getCanvasMousePos(e);
+  const target = pickDraggable(pos.x, pos.y);
+  
+  if (target) {
+    draggingTarget = target;
+    dragStartMouseX = pos.x;
+    dragStartMouseY = pos.y;
+    wasPlayingBeforeDrag = playing;
+    if (playing) {
+      playing = false;
+      playBtn.textContent = '播放';
+    }
+
+    if (target === 'bubble') {
+      dragStartOffsetX = draggableObjects.bubble.offsetX;
+      dragStartOffsetY = draggableObjects.bubble.offsetY;
+    } else if (target === 'tail') {
+      dragStartTailAngle = bubbleDefaults.tailAngle;
+      dragStartTailLength = bubbleDefaults.tailLength;
+      dragStartP1Dist = bubbleDefaults.tailP1Dist;
+      dragStartP2Dist = bubbleDefaults.tailP2Dist;
+    }
+
+    canvas.classList.add('obj-dragging');
+    e.preventDefault();
+  }
+});
+
+canvas.addEventListener('mousemove', (e) => {
+  const pos = getCanvasMousePos(e);
+  
+  if (draggingTarget === 'bubble') {
+    const dx = Math.round(pos.x - dragStartMouseX);
+    const dy = Math.round(pos.y - dragStartMouseY);
+    draggableObjects.bubble.offsetX = dragStartOffsetX + dx;
+    draggableObjects.bubble.offsetY = dragStartOffsetY + dy;
+    
+    const sliderX = document.getElementById('supp-slider-bubbleX');
+    const sliderY = document.getElementById('supp-slider-bubbleY');
+    const labelX = document.getElementById('supp-val-bubbleX');
+    const labelY = document.getElementById('supp-val-bubbleY');
+    if (sliderX) sliderX.value = draggableObjects.bubble.offsetX;
+    if (sliderY) sliderY.value = draggableObjects.bubble.offsetY;
+    if (labelX) labelX.textContent = draggableObjects.bubble.offsetX;
+    if (labelY) labelY.textContent = draggableObjects.bubble.offsetY;
+    
+    render();
+  } else if (draggingTarget === 'tail') {
+    // 计算鼠标相对于轴线起点的向量
+    const start = draggableObjects.tail.axisStart;
+    const dx = pos.x - start.x;
+    const dy = pos.y - start.y;
+
+    // 计算基准方向的基础角度
+    const tailSide = bubbleDefaults.tailSide;
+    let baseAngle = 0;
+    if (tailSide === 'bottom') baseAngle = Math.PI / 2;
+    if (tailSide === 'top') baseAngle = -Math.PI / 2;
+    if (tailSide === 'left') baseAngle = Math.PI;
+    if (tailSide === 'right') baseAngle = 0;
+
+    // 鼠标方向角度
+    const mouseAngle = Math.atan2(dy, dx);
+    // 相对基准方向的偏移角度
+    let offsetAngle = (mouseAngle - baseAngle) * 180 / Math.PI;
+    // 限制角度范围
+    offsetAngle = Math.max(-80, Math.min(80, offsetAngle));
+    bubbleDefaults.tailAngle = Math.round(offsetAngle);
+
+    // 计算新长度
+    const newLength = Math.hypot(dx, dy);
+    const clampedLength = Math.max(30, Math.min(150, newLength));
+    
+    // 保持两个小圆的相对比例
+    const ratio1 = dragStartP1Dist / dragStartTailLength;
+    const ratio2 = dragStartP2Dist / dragStartTailLength;
+    bubbleDefaults.tailLength = Math.round(clampedLength);
+    bubbleDefaults.tailP1Dist = Math.round(ratio1 * clampedLength);
+    bubbleDefaults.tailP2Dist = Math.round(ratio2 * clampedLength);
+
+    syncTailSliders();
+    render();
+  } else {
+    const hover = pickDraggable(pos.x, pos.y);
+    if (hover) {
+      canvas.classList.add('obj-hover');
+    } else {
+      canvas.classList.remove('obj-hover');
+    }
+  }
+});
+
+canvas.addEventListener('mouseup', () => {
+  if (draggingTarget) {
+    draggingTarget = null;
+    canvas.classList.remove('obj-dragging');
+    if (wasPlayingBeforeDrag) {
+      playing = true;
+      playBtn.textContent = '暂停';
+      lastTime = 0;
+    }
+  }
+});
+
+canvas.addEventListener('mouseleave', () => {
+  draggingTarget = null;
+  canvas.classList.remove('obj-dragging', 'obj-hover');
+});
 
 function render() {
   if (!drawFrame) return;
@@ -499,7 +901,6 @@ function render() {
     statusEl.className = 'status error';
   }
 }
-
 function loop(now) {
   if (!lastTime) lastTime = now;
   const delta = (now - lastTime) / 1000;
@@ -540,19 +941,17 @@ parseBtn.addEventListener('click', () => {
   statusEl.textContent = `成功解析 ${params.length} 个参数${hasWarning ? '（含警告）' : ''}`;
   statusEl.className = 'status';
 });
-
 playBtn.addEventListener('click', () => {
   playing = !playing;
   playBtn.textContent = playing ? '暂停' : '播放';
   lastTime = 0;
 });
-
 timeSlider.addEventListener('input', () => {
   t = parseFloat(timeSlider.value);
   render();
 });
 
-// ============= 默认示例：统一使用 drawBubble =============
+// ============= 默认示例 =============
 const demoCode = `// @param {time} popStart 角色弹出开始时间 | range: 0~8 | default: 0.5
 // @param {time} popEnd 角色弹出结束时间 | range: 0~8 | default: 1.2
 // @param {time} bubbleDelay 气泡延迟出现时间 | range: 0~8 | default: 1.5
@@ -561,30 +960,23 @@ const demoCode = `// @param {time} popStart 角色弹出开始时间 | range: 0~
 // @param {number} cloudHeight 云朵纵向高度 | range: 0.6~1.2 | default: 1.0
 // @param {number} bumpHeight 云朵凸起幅度 | range: 0.15~0.4 | default: 0.25
 // @param {number} bumpCount 云朵瓣数 | range: 5~12 | default: 7
-// @param {number} tailSize 尾巴大小 | range: 0.6~1.4 | default: 1.0
 // @constraint popEnd >= popStart
 function drawFrame(t) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-
   const charX = canvas.width / 2;
   const charY = canvas.height - 130;
   const charSize = 90;
   const charHalf = charSize / 2;
-
-  // 角色弹性弹出
   const charProg = prog(t, popStart, popEnd);
   const charScale = easeOutBack(charProg);
-
   ctx.save();
   ctx.translate(charX, charY);
   ctx.scale(charScale, charScale);
-
   ctx.fillStyle = '#ff8822';
   ctx.fillRect(-charHalf, -charHalf, charSize, charSize);
   ctx.strokeStyle = '#333';
   ctx.lineWidth = 3;
   ctx.strokeRect(-charHalf, -charHalf, charSize, charSize);
-
   ctx.fillStyle = '#fff';
   ctx.beginPath();
   ctx.arc(-22, -18, 10, 0, Math.PI * 2);
@@ -595,38 +987,28 @@ function drawFrame(t) {
   ctx.arc(-22, -18, 4.5, 0, Math.PI * 2);
   ctx.arc(22, -18, 4.5, 0, Math.PI * 2);
   ctx.fill();
-
   ctx.fillStyle = '#ff8822';
   ctx.fillRect(-28, charHalf - 8, 18, 28);
   ctx.fillRect(10, charHalf - 8, 18, 28);
   ctx.strokeRect(-28, charHalf - 8, 18, 28);
   ctx.strokeRect(10, charHalf - 8, 18, 28);
-
   ctx.restore();
 
-  // 气泡延迟弹出：统一调用 drawBubble
   const bubbleT = delay(t, bubbleDelay);
   const bubbleProg = prog(bubbleT, 0, 0.55);
   const bubbleScale = easeOutBack(bubbleProg);
   const bubbleAlpha = easeInOut(bubbleProg);
   const bubbleY = charY - charHalf - bubbleSize * 0.8;
-
   ctx.save();
   ctx.globalAlpha = bubbleAlpha;
   ctx.translate(charX, bubbleY);
   ctx.scale(bubbleScale, bubbleScale);
-
   drawBubble(ctx, 0, 0, bubbleSize, {
-    tailType: 'cloud',
-    tailSide: 'bottom',
     cloudWidth: cloudWidth,
     cloudHeight: cloudHeight,
     bumpHeight: bumpHeight,
-    bumpCount: bumpCount,
-    tailSize: tailSize,
-    showDots: true
+    bumpCount: bumpCount
   });
-
   ctx.restore();
 }`;
 
