@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>T-Anim Workbench MVP v0.2</title>
+<title>T-Anim Workbench MVP v0.3</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: system-ui, -apple-system, sans-serif; background: #1e1e1e; color: #ddd; height: 100vh; display: flex; flex-direction: column; }
@@ -42,6 +42,10 @@ body { font-family: system-ui, -apple-system, sans-serif; background: #1e1e1e; c
 .bubble-param-label .value { color: #ce9178; font-family: Consolas, monospace; }
 .bubble-param-slider { width: 100%; }
 .bubble-param-checkbox { transform: scale(1.1); margin-left: 4px; }
+.bubble-param-color {
+  width: 100%; height: 22px; padding: 0; border: 1px solid #3c3c3c;
+  background: #1e1e1e; cursor: pointer; display: block;
+}
 .panel-group-title {
   font-size: 11px; color: #888; margin: 8px 0 4px 0; font-weight: 500;
   border-bottom: 1px dashed #333; padding-bottom: 2px;
@@ -57,10 +61,13 @@ body { font-family: system-ui, -apple-system, sans-serif; background: #1e1e1e; c
   display: flex; align-items: center; padding: 0 16px; gap: 12px; position: relative;
 }
 #playBtn { padding: 4px 12px; background: #0e639c; color: #fff; border: none; border-radius: 2px; cursor: pointer; font-size: 12px; }
-#timeSlider { flex: 1; position: relative; z-index: 1; }
+#exportBtn { padding: 4px 12px; background: #3a3d41; color: #ddd; border: 1px solid #555; border-radius: 2px; cursor: pointer; font-size: 12px; }
+#exportBtn:hover { background: #4a4d51; }
+.track-wrap { flex: 1; align-self: stretch; position: relative; display: flex; align-items: center; }
+#timeSlider { width: 100%; position: relative; z-index: 1; }
 #timeDisplay { font-family: Consolas, monospace; font-size: 12px; color: #ce9178; min-width: 50px; text-align: right; }
 .time-marker-layer {
-  position: absolute; left: 68px; right: 72px; top: 0; bottom: 0;
+  position: absolute; left: 0; right: 0; top: 0; bottom: 0;
   pointer-events: none; z-index: 2;
 }
 .time-marker {
@@ -74,6 +81,31 @@ body { font-family: system-ui, -apple-system, sans-serif; background: #1e1e1e; c
 }
 .status { font-size: 11px; color: #6a9955; margin-top: 6px; }
 .status.error { color: #f44747; }
+
+.export-modal {
+  display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+  align-items: center; justify-content: center; z-index: 100;
+}
+.export-modal.open { display: flex; }
+.export-box {
+  width: 760px; max-width: 92vw; background: #252526; border: 1px solid #3c3c3c;
+  border-radius: 4px; padding: 14px; display: flex; flex-direction: column; gap: 10px;
+}
+.export-title { font-size: 13px; color: #ccc; line-height: 1.5; }
+.export-title .hint { font-size: 11px; color: #888; }
+#exportOutput {
+  width: 100%; height: 360px; background: #1e1e1e; color: #d4d4d4;
+  border: 1px solid #3c3c3c; padding: 8px; font-family: Consolas, monospace;
+  font-size: 12px; resize: vertical; white-space: pre;
+}
+.export-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.export-actions button {
+  padding: 5px 14px; background: #0e639c; color: #fff; border: none;
+  border-radius: 2px; cursor: pointer; font-size: 12px;
+}
+.export-actions button:hover { background: #1177bb; }
+.export-actions button.secondary { background: #3a3d41; border: 1px solid #555; color: #ddd; }
+.export-actions button.secondary:hover { background: #4a4d51; }
 </style>
 </head>
 <body>
@@ -96,51 +128,114 @@ body { font-family: system-ui, -apple-system, sans-serif; background: #1e1e1e; c
 </div>
 <div class="timeline">
   <button id="playBtn">播放</button>
-  <div id="timeMarkerLayer" class="time-marker-layer"></div>
-  <input type="range" id="timeSlider" min="0" max="10" step="0.01" value="0">
+  <button id="exportBtn">导出代码</button>
+  <div class="track-wrap">
+    <div id="timeMarkerLayer" class="time-marker-layer"></div>
+    <input type="range" id="timeSlider" min="0" max="10" step="0.01" value="0">
+  </div>
   <div style="text-align: right;">
     <div id="contentDuration" style="font-size: 10px; color: #888; margin-bottom: 2px;">内容时长: 3.00s</div>
     <div id="timeDisplay">0.00s</div>
   </div>
 </div>
+<div id="exportModal" class="export-modal">
+  <div class="export-box">
+    <div class="export-title">
+      导出当前代码
+      <span class="hint">—— 与原代码逻辑完全一致，只多了记录数值调整的 @adjust 行（画布拖拽 / 补充面板改动）</span>
+    </div>
+    <textarea id="exportOutput" readonly></textarea>
+    <div class="export-actions">
+      <button id="exportCopyBtn">复制</button>
+      <button id="exportApplyBtn">应用到代码框</button>
+      <button id="exportCloseBtn" class="secondary">关闭</button>
+    </div>
+  </div>
+</div>
 <script>
-// ============= 内置动画计算工具库 v0.2 =============
-function prog(t, start, end) {
-  if (t < start) return 0;
-  if (t > end) return 1;
-  return (t - start) / (end - start);
-}
-function fade(t, start, end, inDur, outDur) {
-  if (t < start) return 0;
-  if (t > end + outDur) return 0;
-  if (t < start + inDur) return (t - start) / inDur;
-  if (t > end) return (end + outDur - t) / outDur;
-  return 1;
-}
-function easeParabola(x) {
-  return 1 - (2 * x - 1) * (2 * x - 1);
-}
-function delay(t, delayTime) {
-  if (t < delayTime) return 0;
-  return t - delayTime;
-}
-function sequence(t, stepIndex, stepDuration) {
-  const startTime = stepIndex * stepDuration;
-  const endTime = startTime + stepDuration;
-  if (t < startTime) return 0;
-  if (t > endTime) return 0;
-  return (t - startTime) / stepDuration;
-}
-function easeOutBack(x) {
-  const c1 = 1.70158;
-  const c3 = c1 + 1;
-  return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
-}
-function easeInOut(x) {
-  return x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2;
+// =====================================================================
+//  内置函数注册表 v0.3
+//  每个内置函数只注册一次，注册时声明三件事：
+//    1. 实现（util 用 fn / shape 用 draw）
+//    2. 参数 schema（自动进「补充参数面板」，支持 number / int / enum / checkbox / color）
+//    3. 交互句柄（在绘制过程中 push，自动进画布拖拽系统，无需任何 UI 代码改动）
+//  工作台的「函数注入」「参数面板」「画布拖拽」三条链路全部由本表数据驱动。
+// =====================================================================
+
+const BuiltinRegistry = {
+  _items: [],
+  _handles: [],
+
+  register(def) {
+    if (this._items.some(it => it.name === def.name)) {
+      throw new Error('内置函数重名：' + def.name);
+    }
+    const item = Object.assign({
+      kind: 'shape',
+      params: [],
+      collapsed: false,
+      _callIndex: 0,
+      instances: []
+    }, def);
+    if (item.kind === 'shape') {
+      item.instances.push(item.createState()); // 实例 0 供参数面板绑定
+      item.fn = makeInjectedShape(item);
+    }
+    this._items.push(item);
+    return item;
+  },
+
+  all() { return this._items; },
+  shapes() { return this._items.filter(it => it.kind === 'shape'); },
+  names() { return this._items.map(it => it.name); },
+  fns() { return this._items.map(it => it.fn); },
+
+  // ---- 每帧收集交互句柄（在 render 前调用） ----
+  beginFrame() {
+    this._handles.length = 0;
+    this._items.forEach(it => { it._callIndex = 0; });
+  },
+  pushHandle(handle) { this._handles.push(handle); },
+  // 倒序命中：后绘制的图形优先被拾取
+  pickHandle(mx, my) {
+    for (let i = this._handles.length - 1; i >= 0; i--) {
+      const b = this._handles[i].bounds;
+      if (b && mx >= b.left && mx <= b.right && my >= b.top && my <= b.bottom) {
+        return this._handles[i];
+      }
+    }
+    return null;
+  },
+
+  // ---- 解析代码时把实例状态复位为默认值，让「代码」成为唯一事实来源 ----
+  resetStates() {
+    this.shapes().forEach(item => {
+      item.instances.length = 0;
+      item.instances.push(item.createState());
+    });
+  },
+
+  // ---- 应用代码里的 @adjust 行：设置第 idx 次调用的调整状态 ----
+  setState(name, idx, patch) {
+    const item = this.shapes().find(it => it.name === name);
+    if (!item) return false;
+    while (item.instances.length <= idx) item.instances.push(item.createState());
+    Object.assign(item.instances[idx], patch);
+    return true;
+  }
+};
+
+// 把 shape 包装成 AI 代码里可直接调用的函数：
+// AI 侧签名不变，内部按「本帧第几次调用」分配独立实例，避免多次绘制互相覆盖状态
+function makeInjectedShape(item) {
+  return function (...args) {
+    const idx = item._callIndex++;
+    if (!item.instances[idx]) item.instances[idx] = item.createState();
+    return item.draw(item.instances[idx], ...args);
+  };
 }
 
-// ========== 坐标变换工具 ==========
+// 坐标变换工具（仅内部使用，不注入给 AI）
 function matrixTransformPoint(matrix, x, y) {
   return {
     x: matrix.a * x + matrix.c * y + matrix.e,
@@ -148,300 +243,514 @@ function matrixTransformPoint(matrix, x, y) {
   };
 }
 
-// ========== 对象级拖拽系统 ==========
-const draggableObjects = {
-  bubble: {
-    id: 'bubble',
-    label: '气泡主体',
-    offsetX: 0,
-    offsetY: 0,
-    bounds: { left: 0, right: 0, top: 0, bottom: 0 },
-    visible: true
-  },
-  tail: {
-    id: 'tail',
-    label: '气泡尾巴',
-    bounds: { left: 0, right: 0, top: 0, bottom: 0 },
-    visible: true,
-    axisStart: { x: 0, y: 0 } // 尾巴轴线起点（全局画布坐标）
-  }
-};
-
-let draggingTarget = null;
-let dragStartMouseX = 0;
-let dragStartMouseY = 0;
-let dragStartOffsetX = 0;
-let dragStartOffsetY = 0;
-let dragStartTailAngle = 0;
-let dragStartTailLength = 0;
-let dragStartP1Dist = 0;
-let dragStartP2Dist = 0;
-let wasPlayingBeforeDrag = false;
-
-// ========== 全局气泡样式默认配置 ==========
-const bubbleDefaults = {
-  fillStyle: '#ffffff',
-  strokeStyle: '#333333',
-  lineWidth: 3,
-  cloudWidth: 1.0,
-  cloudHeight: 1.0,
-  bumpHeight: 0.25,
-  bumpCount: 7,
-  tailType: 'cloud',
-  tailSide: 'bottom',
-  tailSize: 1.0,
-  showDots: null,
-  showTail: true,
-  // ===== 新增：尾巴轴线参数 =====
-  tailAngle: 0,       // 尾巴角度偏移（度）
-  tailLength: 80,     // 尾巴轴线总长度
-  tailP1Dist: 26,     // 第一个圆距气泡起点距离
-  tailP2Dist: 62,     // 第二个圆距气泡起点距离
-  tailR1: 15,         // 第一个圆半径
-  tailR2: 11          // 第二个圆半径
-};
-
-const builtinBubbleParams = [
-  { group: '位置调整', name: 'bubbleX', label: '气泡水平位置', min: -200, max: 200, value: 0, step: 1, isInt: true, target: 'bubble', prop: 'offsetX' },
-  { group: '位置调整', name: 'bubbleY', label: '气泡垂直位置', min: -200, max: 200, value: 0, step: 1, isInt: true, target: 'bubble', prop: 'offsetY' },
-  
-  { group: '尾巴轴线', name: 'tailAngle', label: '尾巴角度', min: -80, max: 80, value: 0, step: 1, isInt: true },
-  { group: '尾巴轴线', name: 'tailLength', label: '尾巴总长度', min: 30, max: 150, value: 80, step: 1, isInt: true },
-  { group: '尾巴轴线', name: 'tailP1Dist', label: '小圆1距气泡', min: 10, max: 100, value: 26, step: 1, isInt: true },
-  { group: '尾巴轴线', name: 'tailP2Dist', label: '小圆2距气泡', min: 30, max: 140, value: 62, step: 1, isInt: true },
-  { group: '尾巴轴线', name: 'tailR1', label: '小圆1半径', min: 5, max: 25, value: 15, step: 1, isInt: true },
-  { group: '尾巴轴线', name: 'tailR2', label: '小圆2半径', min: 4, max: 20, value: 11, step: 1, isInt: true },
-
-  { group: '样式调整', name: 'cloudWidth', label: '云朵横向宽度', min: 0.7, max: 1.4, value: 1.0, step: 0.01 },
-  { group: '样式调整', name: 'cloudHeight', label: '云朵纵向高度', min: 0.6, max: 1.2, value: 1.0, step: 0.01 },
-  { group: '样式调整', name: 'bumpHeight', label: '云朵凸起幅度', min: 0.15, max: 0.4, value: 0.25, step: 0.01 },
-  { group: '样式调整', name: 'bumpCount', label: '云朵凸起瓣数', min: 5, max: 12, value: 7, step: 1, isInt: true },
-  { group: '样式调整', name: 'lineWidth', label: '描边粗细', min: 1, max: 8, value: 3, step: 0.5 },
-  { group: '样式调整', name: 'tailType', label: '尾巴类型:0=云朵 1=尖角 2=无', min: 0, max: 2, value: 0, step: 1, isInt: true, enum: ['cloud', 'point', 'none'] },
-  { group: '样式调整', name: 'tailSide', label: '尾巴方向:0=下 1=上 2=左 3=右', min: 0, max: 3, value: 0, step: 1, isInt: true, enum: ['bottom', 'top', 'left', 'right'] },
-  { group: '样式调整', name: 'showDots', label: '显示思考圆点', type: 'checkbox', value: true },
-  { group: '样式调整', name: 'showTail', label: '显示尾巴', type: 'checkbox', value: true }
-];
-
-let bubblePanelCollapsed = false;
-
-// ============= 内置标准绘制工具库 v0.2 =============
-function drawBubble(ctx, x, y, size, options) {
-  options = options || {};
-  const fillStyle = options.fillStyle || bubbleDefaults.fillStyle;
-  const strokeStyle = options.strokeStyle || bubbleDefaults.strokeStyle;
-  const lineWidth = options.lineWidth || bubbleDefaults.lineWidth;
-  const cloudWidth = options.cloudWidth || bubbleDefaults.cloudWidth;
-  const cloudHeight = options.cloudHeight || bubbleDefaults.cloudHeight;
-  const bumpHeight = options.bumpHeight || bubbleDefaults.bumpHeight;
-  const bumpCount = Math.round(options.bumpCount || bubbleDefaults.bumpCount);
-  const tailType = options.tailType || bubbleDefaults.tailType;
-  const tailSide = options.tailSide || bubbleDefaults.tailSide;
-  const showTail = options.showTail !== undefined ? options.showTail : bubbleDefaults.showTail;
-
-  let showDots;
-  if (options.showDots !== undefined) {
-    showDots = options.showDots;
-  } else if (bubbleDefaults.showDots !== null) {
-    showDots = bubbleDefaults.showDots;
-  } else {
-    showDots = tailType === 'cloud';
-  }
-
-  // 气泡主体位置
-  const bubbleX = x + draggableObjects.bubble.offsetX;
-  const bubbleY = y + draggableObjects.bubble.offsetY;
-
-  ctx.save();
-  ctx.translate(bubbleX, bubbleY);
-  ctx.fillStyle = fillStyle;
-  ctx.strokeStyle = strokeStyle;
-  ctx.lineWidth = lineWidth;
-  ctx.lineJoin = 'round';
-
-  const baseRx = size * 0.6 * cloudWidth;
-  const baseRy = size * 0.4 * cloudHeight;
-  const bumpH = size * bumpHeight;
-
-  // ---------- 绘制气泡主体 ----------
-  ctx.beginPath();
-  for (let i = 0; i < bumpCount; i++) {
-    const angleStart = (i / bumpCount) * Math.PI * 2 - Math.PI / 2;
-    const angleEnd = ((i + 1) / bumpCount) * Math.PI * 2 - Math.PI / 2;
-    const x1 = Math.cos(angleStart) * baseRx;
-    const y1 = Math.sin(angleStart) * baseRy;
-    const x2 = Math.cos(angleEnd) * baseRx;
-    const y2 = Math.sin(angleEnd) * baseRy;
-    const midAngle = (angleStart + angleEnd) / 2;
-
-    let flatFactor = 1;
-    if (tailSide === 'bottom' && midAngle > Math.PI / 4 && midAngle < Math.PI * 3 / 4) flatFactor = 0.7;
-    if (tailSide === 'top' && midAngle > -Math.PI / 4 && midAngle < Math.PI / 4) flatFactor = 0.7;
-    if (tailSide === 'left' && midAngle > Math.PI * 2 / 4 && midAngle < Math.PI * 4 / 4) flatFactor = 0.7;
-    if (tailSide === 'right' && midAngle > -Math.PI * 4 / 4 && midAngle < -Math.PI * 2 / 4) flatFactor = 0.7;
-
-    const currentBump = bumpH * flatFactor;
-    const cpx = Math.cos(midAngle) * (baseRx + currentBump);
-    const cpy = Math.sin(midAngle) * (baseRy + currentBump);
-    if (i === 0) ctx.moveTo(x1, y1);
-    ctx.quadraticCurveTo(cpx, cpy, x2, y2);
-  }
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-
-  // 记录气泡主体全局边界
-  const matrix = ctx.getTransform();
-  let localLeft = -(baseRx + bumpH);
-  let localRight = baseRx + bumpH;
-  let localTop = -(baseRy + bumpH);
-  let localBottom = baseRy + bumpH;
-  const p1 = matrixTransformPoint(matrix, localLeft, localTop);
-  const p2 = matrixTransformPoint(matrix, localRight, localBottom);
-  draggableObjects.bubble.bounds.left = p1.x;
-  draggableObjects.bubble.bounds.right = p2.x;
-  draggableObjects.bubble.bounds.top = p1.y;
-  draggableObjects.bubble.bounds.bottom = p2.y;
-  draggableObjects.bubble.visible = true;
-
-  // ---------- 绘制尾巴（轴线驱动版） ----------
-  let tailDrawn = false;
-  if (showTail && tailType !== 'none') {
-    // 尾巴轴线起点：气泡边缘中心
-    let tailStartX = 0, tailStartY = 0;
-    // 基准方向向量
-    let baseDirX = 0, baseDirY = 1;
-
-    if (tailSide === 'bottom') {
-      tailStartY = baseRy;
-      baseDirX = 0; baseDirY = 1;
-    } else if (tailSide === 'top') {
-      tailStartY = -baseRy;
-      baseDirX = 0; baseDirY = -1;
-    } else if (tailSide === 'left') {
-      tailStartX = -baseRx;
-      baseDirX = -1; baseDirY = 0;
-    } else if (tailSide === 'right') {
-      tailStartX = baseRx;
-      baseDirX = 1; baseDirY = 0;
-    }
-
-    // 应用角度旋转
-    const angleRad = (bubbleDefaults.tailAngle * Math.PI) / 180;
-    const cos = Math.cos(angleRad);
-    const sin = Math.sin(angleRad);
-    const dirX = baseDirX * cos - baseDirY * sin;
-    const dirY = baseDirX * sin + baseDirY * cos;
-
-    // 计算两个圆在轴线上的位置
-    let p1x = tailStartX + dirX * bubbleDefaults.tailP1Dist;
-    let p1y = tailStartY + dirY * bubbleDefaults.tailP1Dist;
-    let p2x = tailStartX + dirX * bubbleDefaults.tailP2Dist;
-    let p2y = tailStartY + dirY * bubbleDefaults.tailP2Dist;
-
-    // ===== 强制两个圆不相交 =====
-    const minCenterDist = bubbleDefaults.tailR1 + bubbleDefaults.tailR2 + 3;
-    const dx = p2x - p1x;
-    const dy = p2y - p1y;
-    const dist = Math.hypot(dx, dy);
-    if (dist < minCenterDist && dist > 0.001) {
-      const scale = minCenterDist / dist;
-      p2x = p1x + dx * scale;
-      p2y = p1y + dy * scale;
-    }
-
-    if (tailType === 'cloud') {
-      // 绘制两个圆
-      ctx.beginPath();
-      ctx.arc(p1x, p1y, bubbleDefaults.tailR1, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.arc(p2x, p2y, bubbleDefaults.tailR2, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-
-      // 记录尾巴边界
-      const tMinX = Math.min(p1x - bubbleDefaults.tailR1, p2x - bubbleDefaults.tailR2) - 4;
-      const tMaxX = Math.max(p1x + bubbleDefaults.tailR1, p2x + bubbleDefaults.tailR2) + 4;
-      const tMinY = Math.min(p1y - bubbleDefaults.tailR1, p2y - bubbleDefaults.tailR2) - 4;
-      const tMaxY = Math.max(p1y + bubbleDefaults.tailR1, p2y + bubbleDefaults.tailR2) + 4;
-      const tp1 = matrixTransformPoint(matrix, tMinX, tMinY);
-      const tp2 = matrixTransformPoint(matrix, tMaxX, tMaxY);
-      draggableObjects.tail.bounds.left = tp1.x;
-      draggableObjects.tail.bounds.right = tp2.x;
-      draggableObjects.tail.bounds.top = tp1.y;
-      draggableObjects.tail.bounds.bottom = tp2.y;
-
-      // 记录轴线起点全局坐标（用于拖拽计算）
-      const startGlobal = matrixTransformPoint(matrix, tailStartX, tailStartY);
-      draggableObjects.tail.axisStart.x = startGlobal.x;
-      draggableObjects.tail.axisStart.y = startGlobal.y;
-
-      tailDrawn = true;
-    } else if (tailType === 'point') {
-      // 尖角尾巴沿用轴线逻辑
-      const tipX = tailStartX + dirX * bubbleDefaults.tailLength;
-      const tipY = tailStartY + dirY * bubbleDefaults.tailLength;
-      const w = bubbleDefaults.tailR1 * 0.8;
-      const perpX = -dirY * w;
-      const perpY = dirX * w;
-      const leftX = tipX + perpX;
-      const leftY = tipY + perpY;
-      const rightX = tipX - perpX;
-      const rightY = tipY - perpY;
-
-      ctx.beginPath();
-      ctx.moveTo(leftX, leftY);
-      ctx.lineTo(tipX, tipY);
-      ctx.lineTo(rightX, rightY);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-
-      const tMinX = Math.min(leftX, tipX, rightX) - 4;
-      const tMaxX = Math.max(leftX, tipX, rightX) + 4;
-      const tMinY = Math.min(leftY, tipY, rightY) - 4;
-      const tMaxY = Math.max(leftY, tipY, rightY) + 4;
-      const tp1 = matrixTransformPoint(matrix, tMinX, tMinY);
-      const tp2 = matrixTransformPoint(matrix, tMaxX, tMaxY);
-      draggableObjects.tail.bounds.left = tp1.x;
-      draggableObjects.tail.bounds.right = tp2.x;
-      draggableObjects.tail.bounds.top = tp1.y;
-      draggableObjects.tail.bounds.bottom = tp2.y;
-
-      const startGlobal = matrixTransformPoint(matrix, tailStartX, tailStartY);
-      draggableObjects.tail.axisStart.x = startGlobal.x;
-      draggableObjects.tail.axisStart.y = startGlobal.y;
-
-      tailDrawn = true;
-    }
-  }
-  draggableObjects.tail.visible = tailDrawn;
-
-  // ---------- 内部思考圆点 ----------
-  if (showDots) {
-    const dotGap = size * 0.23;
-    const dotRadius = size * 0.09;
-    ctx.fillStyle = strokeStyle;
-    ctx.beginPath();
-    ctx.arc(-dotGap, 0, dotRadius, 0, Math.PI * 2);
-    ctx.arc(0, 0, dotRadius, 0, Math.PI * 2);
-    ctx.arc(dotGap, 0, dotRadius, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  ctx.restore();
+function registerUtil(name, fn) {
+  BuiltinRegistry.register({ name, kind: 'util', fn });
 }
 
-// ============= 全局状态 =============
+// =====================================================================
+//  注册项一：动画计算工具库（util，无可视参数、无交互句柄）
+// =====================================================================
+
+registerUtil('prog', function prog(t, start, end) {
+  if (t < start) return 0;
+  if (t > end) return 1;
+  return (t - start) / (end - start);
+});
+
+registerUtil('fade', function fade(t, start, end, inDur, outDur) {
+  if (t < start) return 0;
+  if (t > end + outDur) return 0;
+  if (t < start + inDur) return (t - start) / inDur;
+  if (t > end) return (end + outDur - t) / outDur;
+  return 1;
+});
+
+registerUtil('easeParabola', function easeParabola(x) {
+  return 1 - (2 * x - 1) * (2 * x - 1);
+});
+
+registerUtil('delay', function delay(t, delayTime) {
+  if (t < delayTime) return 0;
+  return t - delayTime;
+});
+
+registerUtil('sequence', function sequence(t, stepIndex, stepDuration) {
+  const startTime = stepIndex * stepDuration;
+  const endTime = startTime + stepDuration;
+  if (t < startTime) return 0;
+  if (t > endTime) return 0;
+  return (t - startTime) / stepDuration;
+});
+
+registerUtil('easeOutBack', function easeOutBack(x) {
+  const c1 = 1.70158;
+  const c3 = c1 + 1;
+  return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
+});
+
+registerUtil('easeInOut', function easeInOut(x) {
+  return x < 0.5 ? 2 * x * x : 1 - Math.pow(-2 * x + 2, 2) / 2;
+});
+
+// =====================================================================
+//  注册项二：drawBubble（shape，第一个迁移样板）
+//  参数 schema 的 key 直接对应实例状态字段；句柄在 draw 内 push
+// =====================================================================
+
+BuiltinRegistry.register({
+  name: 'drawBubble',
+  kind: 'shape',
+  label: '云朵气泡',
+
+  createState() { return Object.assign({}, this.defaults); },
+  defaults: {
+    fillStyle: '#ffffff',
+    strokeStyle: '#333333',
+    lineWidth: 3,
+    cloudWidth: 1.0,
+    cloudHeight: 1.0,
+    bumpHeight: 0.25,
+    bumpCount: 7,
+    tailType: 'cloud',
+    tailSide: 'bottom',
+    tailSize: 1.0,
+    showDots: null,       // null = 跟随 tailType 自动
+    showTail: true,
+    tailAngle: 0,
+    offsetX: 0,
+    offsetY: 0
+  },
+
+  params: [
+    { key: 'offsetX', group: '位置调整', label: '气泡水平位置', min: -300, max: 300, step: 1, isInt: true },
+    { key: 'offsetY', group: '位置调整', label: '气泡垂直位置', min: -300, max: 300, step: 1, isInt: true },
+
+    { key: 'tailAngle', group: '尾巴轴线', label: '尾巴角度(度)', min: -80, max: 80, step: 1, isInt: true },
+    { key: 'tailSize', group: '尾巴轴线', label: '尾巴总缩放', min: 0.4, max: 2.2, step: 0.02 },
+    { key: 'tailType', group: '尾巴轴线', label: '尾巴类型', min: 0, max: 2, step: 1, isInt: true, enum: ['cloud', 'point', 'none'] },
+    { key: 'tailSide', group: '尾巴轴线', label: '尾巴方向', min: 0, max: 3, step: 1, isInt: true, enum: ['bottom', 'top', 'left', 'right'] },
+
+    { key: 'cloudWidth', group: '样式调整', label: '云朵横向宽度', min: 0.7, max: 1.4, step: 0.01 },
+    { key: 'cloudHeight', group: '样式调整', label: '云朵纵向高度', min: 0.6, max: 1.2, step: 0.01 },
+    { key: 'bumpHeight', group: '样式调整', label: '云朵凸起幅度', min: 0.15, max: 0.4, step: 0.01 },
+    { key: 'bumpCount', group: '样式调整', label: '云朵凸起瓣数', min: 5, max: 12, step: 1, isInt: true },
+    { key: 'lineWidth', group: '样式调整', label: '描边粗细', min: 0, max: 8, step: 0.5 },
+    { key: 'fillStyle', group: '样式调整', label: '填充色', type: 'color' },
+    { key: 'strokeStyle', group: '样式调整', label: '描边色', type: 'color' },
+    { key: 'showDots', group: '样式调整', label: '显示思考圆点', type: 'checkbox', auto: inst => inst.tailType === 'cloud' },
+    { key: 'showTail', group: '样式调整', label: '显示尾巴', type: 'checkbox' }
+  ],
+
+  draw(inst, ctx, x, y, size, options) {
+    options = options || {};
+    const st = inst;
+
+    const fillStyle = options.fillStyle || st.fillStyle;
+    const strokeStyle = options.strokeStyle || st.strokeStyle;
+    const lineWidth = options.lineWidth !== undefined ? options.lineWidth : st.lineWidth;
+    const cloudWidth = options.cloudWidth || st.cloudWidth;
+    const cloudHeight = options.cloudHeight || st.cloudHeight;
+    const bumpHeight = options.bumpHeight || st.bumpHeight;
+    const bumpCount = Math.round(options.bumpCount || st.bumpCount);
+    const tailType = options.tailType || st.tailType;
+    const tailSide = options.tailSide || st.tailSide;
+    const tailSize = options.tailSize !== undefined ? options.tailSize : st.tailSize;
+    const tailAngle = options.tailAngle !== undefined ? options.tailAngle : st.tailAngle;
+    const showTail = options.showTail !== undefined ? options.showTail : st.showTail;
+
+    let showDots;
+    if (options.showDots !== undefined) {
+      showDots = options.showDots;
+    } else if (st.showDots !== null && st.showDots !== undefined) {
+      showDots = st.showDots;
+    } else {
+      showDots = tailType === 'cloud';
+    }
+
+    // 气泡主体位置（拖拽偏移量）
+    const bubbleX = x + st.offsetX;
+    const bubbleY = y + st.offsetY;
+
+    ctx.save();
+    ctx.translate(bubbleX, bubbleY);
+    ctx.fillStyle = fillStyle;
+    ctx.strokeStyle = strokeStyle;
+    ctx.lineWidth = lineWidth;
+    ctx.lineJoin = 'round';
+
+    const baseRx = size * 0.6 * cloudWidth;
+    const baseRy = size * 0.4 * cloudHeight;
+    const bumpH = size * bumpHeight;
+
+    // ---------- 绘制气泡主体 ----------
+    ctx.beginPath();
+    for (let i = 0; i < bumpCount; i++) {
+      const angleStart = (i / bumpCount) * Math.PI * 2 - Math.PI / 2;
+      const angleEnd = ((i + 1) / bumpCount) * Math.PI * 2 - Math.PI / 2;
+      const x1 = Math.cos(angleStart) * baseRx;
+      const y1 = Math.sin(angleStart) * baseRy;
+      const x2 = Math.cos(angleEnd) * baseRx;
+      const y2 = Math.sin(angleEnd) * baseRy;
+      const midAngle = (angleStart + angleEnd) / 2;
+
+      let flatFactor = 1;
+      if (tailSide === 'bottom' && midAngle > Math.PI / 4 && midAngle < Math.PI * 3 / 4) flatFactor = 0.7;
+      if (tailSide === 'top' && midAngle > -Math.PI / 4 && midAngle < Math.PI / 4) flatFactor = 0.7;
+      if (tailSide === 'left' && midAngle > Math.PI * 2 / 4 && midAngle < Math.PI * 4 / 4) flatFactor = 0.7;
+      if (tailSide === 'right' && midAngle > -Math.PI * 4 / 4 && midAngle < -Math.PI * 2 / 4) flatFactor = 0.7;
+
+      const currentBump = bumpH * flatFactor;
+      const cpx = Math.cos(midAngle) * (baseRx + currentBump);
+      const cpy = Math.sin(midAngle) * (baseRy + currentBump);
+      if (i === 0) ctx.moveTo(x1, y1);
+      ctx.quadraticCurveTo(cpx, cpy, x2, y2);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    const matrix = ctx.getTransform();
+
+    // 记录气泡主体边界 → 注册「整体拖动」句柄
+    const halfW = baseRx + bumpH;
+    const halfH = baseRy + bumpH;
+    const g1 = matrixTransformPoint(matrix, -halfW, -halfH);
+    const g2 = matrixTransformPoint(matrix, halfW, halfH);
+    BuiltinRegistry.pushHandle({
+      key: 'bubble',
+      label: '气泡主体',
+      bounds: { left: g1.x, right: g2.x, top: g1.y, bottom: g2.y },
+      onDown(pos) {
+        return { offsetX: st.offsetX, offsetY: st.offsetY, mx: pos.x, my: pos.y };
+      },
+      onMove(pos, d) {
+        st.offsetX = d.offsetX + (pos.x - d.mx);
+        st.offsetY = d.offsetY + (pos.y - d.my);
+      }
+    });
+
+    // ---------- 绘制尾巴（比例制轴线驱动） ----------
+    let tailDrawn = false;
+    let tailBounds = null;
+    let tailAxisStart = null;
+
+    if (showTail && tailType !== 'none') {
+      const tailBase = size * tailSize;
+      const tailR1 = tailBase * 0.18;
+      const tailR2 = tailBase * 0.12;
+      const tailP1Dist = tailBase * 0.35;
+      const tailP2Dist = tailBase * 0.8;
+
+      let tailStartX = 0, tailStartY = 0;
+      let baseDirX = 0, baseDirY = 1;
+
+      if (tailSide === 'bottom') {
+        tailStartY = baseRy; baseDirX = 0; baseDirY = 1;
+      } else if (tailSide === 'top') {
+        tailStartY = -baseRy; baseDirX = 0; baseDirY = -1;
+      } else if (tailSide === 'left') {
+        tailStartX = -baseRx; baseDirX = -1; baseDirY = 0;
+      } else if (tailSide === 'right') {
+        tailStartX = baseRx; baseDirX = 1; baseDirY = 0;
+      }
+
+      const angleRad = (tailAngle * Math.PI) / 180;
+      const cos = Math.cos(angleRad);
+      const sin = Math.sin(angleRad);
+      const dirX = baseDirX * cos - baseDirY * sin;
+      const dirY = baseDirX * sin + baseDirY * cos;
+
+      let p1x = tailStartX + dirX * tailP1Dist;
+      let p1y = tailStartY + dirY * tailP1Dist;
+      let p2x = tailStartX + dirX * tailP2Dist;
+      let p2y = tailStartY + dirY * tailP2Dist;
+
+      // 强制两个圆不相交
+      const minCenterDist = tailR1 + tailR2 + 3;
+      const dx = p2x - p1x;
+      const dy = p2y - p1y;
+      const dist = Math.hypot(dx, dy);
+      if (dist < minCenterDist && dist > 0.001) {
+        const scale = minCenterDist / dist;
+        p2x = p1x + dx * scale;
+        p2y = p1y + dy * scale;
+      }
+
+      if (tailType === 'cloud') {
+        ctx.beginPath();
+        ctx.arc(p1x, p1y, tailR1, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(p2x, p2y, tailR2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        const tMinX = Math.min(p1x - tailR1, p2x - tailR2);
+        const tMaxX = Math.max(p1x + tailR1, p2x + tailR2);
+        const tMinY = Math.min(p1y - tailR1, p2y - tailR2);
+        const tMaxY = Math.max(p1y + tailR1, p2y + tailR2);
+        const tp1 = matrixTransformPoint(matrix, tMinX, tMinY);
+        const tp2 = matrixTransformPoint(matrix, tMaxX, tMaxY);
+        tailBounds = { left: tp1.x, right: tp2.x, top: tp1.y, bottom: tp2.y };
+        tailAxisStart = matrixTransformPoint(matrix, tailStartX, tailStartY);
+        tailDrawn = true;
+
+      } else if (tailType === 'point') {
+        const tipLen = tailBase * 0.55;
+        const tipX = tailStartX + dirX * tipLen;
+        const tipY = tailStartY + dirY * tipLen;
+        const w = tailBase * 0.22;
+        const perpX = -dirY * w;
+        const perpY = dirX * w;
+        const leftX = tipX + perpX, leftY = tipY + perpY;
+        const rightX = tipX - perpX, rightY = tipY - perpY;
+
+        ctx.beginPath();
+        ctx.moveTo(leftX, leftY);
+        ctx.lineTo(tipX, tipY);
+        ctx.lineTo(rightX, rightY);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+
+        const tMinX = Math.min(leftX, tipX, rightX);
+        const tMaxX = Math.max(leftX, tipX, rightX);
+        const tMinY = Math.min(leftY, tipY, rightY);
+        const tMaxY = Math.max(leftY, tipY, rightY);
+        const tp1 = matrixTransformPoint(matrix, tMinX, tMinY);
+        const tp2 = matrixTransformPoint(matrix, tMaxX, tMaxY);
+        tailBounds = { left: tp1.x, right: tp2.x, top: tp1.y, bottom: tp2.y };
+        tailAxisStart = matrixTransformPoint(matrix, tailStartX, tailStartY);
+        tailDrawn = true;
+      }
+    }
+
+    // 注册「尾巴拖拽」句柄：拖动同时改变 tailAngle 与 tailSize
+    if (tailDrawn) {
+      BuiltinRegistry.pushHandle({
+        key: 'tail',
+        label: '气泡尾巴',
+        bounds: tailBounds,
+        onDown(pos) {
+          return {
+            startX: tailAxisStart.x,
+            startY: tailAxisStart.y,
+            tailSize: st.tailSize,
+            baseLength: Math.hypot(pos.x - tailAxisStart.x, pos.y - tailAxisStart.y) || 1
+          };
+        },
+        onMove(pos, d) {
+          const mdx = pos.x - d.startX;
+          const mdy = pos.y - d.startY;
+
+          // 角度：相对 tailSide 基准方向的偏移，归一化到 -180~180 后限制在 ±80
+          const baseAngle = { bottom: Math.PI / 2, top: -Math.PI / 2, left: Math.PI, right: 0 }[tailSide];
+          let offsetDeg = (Math.atan2(mdy, mdx) - baseAngle) * 180 / Math.PI;
+          offsetDeg = ((offsetDeg + 180) % 360 + 360) % 360 - 180;
+          st.tailAngle = Math.round(Math.max(-80, Math.min(80, offsetDeg)));
+
+          // 长度：拖动距离 / 按下时距离 = 缩放倍率
+          const ratio = Math.hypot(mdx, mdy) / d.baseLength;
+          st.tailSize = Math.max(0.4, Math.min(2.2, +(d.tailSize * ratio).toFixed(2)));
+        }
+      });
+    }
+
+    // ---------- 内部思考圆点 ----------
+    if (showDots) {
+      const dotGap = size * 0.23;
+      const dotRadius = size * 0.09;
+      ctx.fillStyle = strokeStyle;
+      ctx.beginPath();
+      ctx.arc(-dotGap, 0, dotRadius, 0, Math.PI * 2);
+      ctx.arc(0, 0, dotRadius, 0, Math.PI * 2);
+      ctx.arc(dotGap, 0, dotRadius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // ---------- 气泡内容（文字、图标等） ----------
+    // 回调在当前坐标系内执行：原点 = 气泡中心，且已包含拖拽偏移，
+    // 因此写进回调的内容会跟气泡一起移动、一起缩放
+    if (typeof options.content === 'function') {
+      options.content(ctx, size);
+    }
+
+    ctx.restore();
+  }
+});
+
+// =====================================================================
+//  注册项三：drawStarburst（爆炸星形）
+//  仅新增此段注册代码，工作台的注入 / 参数面板 / 拖拽自动获得能力
+// =====================================================================
+
+BuiltinRegistry.register({
+  name: 'drawStarburst',
+  kind: 'shape',
+  label: '爆炸星形',
+
+  createState() { return Object.assign({}, this.defaults); },
+  defaults: {
+    starPoints: 8,
+    starDepth: 0.45,      // 内圈半径 / 外圈半径
+    rotation: 0,
+    lineWidth: 3,
+    fillStyle: '#ffd54a',
+    strokeStyle: '#333333',
+    offsetX: 0,
+    offsetY: 0
+  },
+
+  params: [
+    { key: 'offsetX', group: '位置调整', label: '星形水平位置', min: -300, max: 300, step: 1, isInt: true },
+    { key: 'offsetY', group: '位置调整', label: '星形垂直位置', min: -300, max: 300, step: 1, isInt: true },
+
+    { key: 'starPoints', group: '星形造型', label: '星形角数', min: 3, max: 20, step: 1, isInt: true },
+    { key: 'starDepth', group: '星形造型', label: '内圈半径比例', min: 0.15, max: 0.85, step: 0.01 },
+    { key: 'rotation', group: '星形造型', label: '旋转角度(度)', min: -180, max: 180, step: 1, isInt: true },
+
+    { key: 'lineWidth', group: '样式调整', label: '描边粗细', min: 0, max: 10, step: 0.5 },
+    { key: 'fillStyle', group: '样式调整', label: '填充色', type: 'color' },
+    { key: 'strokeStyle', group: '样式调整', label: '描边色', type: 'color' }
+  ],
+
+  draw(inst, ctx, x, y, size, options) {
+    options = options || {};
+    const st = inst;
+    const points = Math.max(3, Math.round(options.starPoints || st.starPoints));
+    const depth = options.starDepth || st.starDepth;
+    const rotation = options.rotation !== undefined ? options.rotation : st.rotation;
+    const lineWidth = options.lineWidth !== undefined ? options.lineWidth : st.lineWidth;
+    const fillStyle = options.fillStyle || st.fillStyle;
+    const strokeStyle = options.strokeStyle || st.strokeStyle;
+
+    const outerR = size * 0.5;
+    const innerR = outerR * depth;
+
+    ctx.save();
+    ctx.translate(x + st.offsetX, y + st.offsetY);
+    ctx.rotate(rotation * Math.PI / 180);
+    ctx.fillStyle = fillStyle;
+    ctx.strokeStyle = strokeStyle;
+    ctx.lineWidth = lineWidth;
+    ctx.lineJoin = 'round';
+
+    ctx.beginPath();
+    for (let i = 0; i < points * 2; i++) {
+      const r = (i % 2 === 0) ? outerR : innerR;
+      const a = (i / (points * 2)) * Math.PI * 2 - Math.PI / 2;
+      const px = Math.cos(a) * r;
+      const py = Math.sin(a) * r;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fill();
+    if (lineWidth > 0) ctx.stroke();
+
+    // 记录旋转无关的外接圆边界 → 注册「整体拖动」句柄
+    const matrix = ctx.getTransform();
+    const center = matrixTransformPoint(matrix, 0, 0);
+    const scaleX = Math.hypot(matrix.a, matrix.b);
+    const scaleY = Math.hypot(matrix.c, matrix.d);
+    const r = outerR * Math.max(scaleX, scaleY) + lineWidth;
+    BuiltinRegistry.pushHandle({
+      key: 'star',
+      label: '爆炸星形',
+      bounds: { left: center.x - r, right: center.x + r, top: center.y - r, bottom: center.y + r },
+      onDown(pos) {
+        return { offsetX: st.offsetX, offsetY: st.offsetY, mx: pos.x, my: pos.y };
+      },
+      onMove(pos, d) {
+        st.offsetX = d.offsetX + (pos.x - d.mx);
+        st.offsetY = d.offsetY + (pos.y - d.my);
+      }
+    });
+
+    // ---------- 星形内容（文字、图标等） ----------
+    // 同 drawBubble：回调内原点 = 星形中心，已含拖拽偏移与旋转
+    if (typeof options.content === 'function') {
+      options.content(ctx, size);
+    }
+
+    ctx.restore();
+  }
+});
+
+// =====================================================================
+//  注册项三：drawGroup（通用可拖动编组）
+//  AI 把任意原生 canvas 绘制代码包进 content 回调，即可获得拖拽能力：
+//  内容随编组一起平移，位移由工作台管理并经 @adjust 回写进代码。
+// =====================================================================
+
+BuiltinRegistry.register({
+  name: 'drawGroup',
+  kind: 'shape',
+  label: '可拖动编组',
+
+  createState() { return Object.assign({}, this.defaults); },
+  defaults: {
+    offsetX: 0,
+    offsetY: 0,
+    width: 120,
+    height: 120
+  },
+
+  params: [
+    { key: 'offsetX', group: '位置调整', label: '编组水平位置', min: -400, max: 400, step: 1, isInt: true },
+    { key: 'offsetY', group: '位置调整', label: '编组垂直位置', min: -400, max: 400, step: 1, isInt: true }
+  ],
+
+  // 签名：drawGroup(ctx, x, y, options)
+  // options.width / options.height：命中区域尺寸，未传时用默认 120×120
+  // options.content：内容回调，签名 content(ctx, box)，box = { width, height }
+  draw(inst, ctx, x, y, options) {
+    options = options || {};
+    const st = inst;
+
+    const w = options.width !== undefined ? options.width : st.width;
+    const h = options.height !== undefined ? options.height : st.height;
+
+    ctx.save();
+    ctx.translate(x + st.offsetX, y + st.offsetY);
+
+    // 内容回调：原点 = 编组中心，已包含拖拽偏移
+    if (typeof options.content === 'function') {
+      options.content(ctx, { width: w, height: h });
+    }
+
+    // 记录编组边界 → 注册「整体拖动」句柄（沿用与 drawBubble 相同的偏移机制）
+    const matrix = ctx.getTransform();
+    const g1 = matrixTransformPoint(matrix, -w / 2, -h / 2);
+    const g2 = matrixTransformPoint(matrix, w / 2, h / 2);
+    BuiltinRegistry.pushHandle({
+      key: 'group',
+      label: '可拖动编组',
+      bounds: { left: g1.x, right: g2.x, top: g1.y, bottom: g2.y },
+      onDown(pos) {
+        return { offsetX: st.offsetX, offsetY: st.offsetY, mx: pos.x, my: pos.y };
+      },
+      onMove(pos, d) {
+        st.offsetX = d.offsetX + (pos.x - d.mx);
+        st.offsetY = d.offsetY + (pos.y - d.my);
+      }
+    });
+
+    ctx.restore();
+  }
+});
+
+// =====================================================================
+//  全局状态
+// =====================================================================
+
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const codeInput = document.getElementById('codeInput');
 const parseBtn = document.getElementById('parseBtn');
 const paramPanel = document.getElementById('paramPanel');
 const playBtn = document.getElementById('playBtn');
+const exportBtn = document.getElementById('exportBtn');
 const timeSlider = document.getElementById('timeSlider');
 const timeDisplay = document.getElementById('timeDisplay');
 const statusEl = document.getElementById('status');
@@ -456,7 +765,15 @@ let draggingIndex = -1;
 let dragStartX = 0;
 let dragStartValue = 0;
 
-// ============= 参数解析器 =============
+// 画布拖拽会话
+let activeHandle = null;
+let activeDragCtx = null;
+let wasPlayingBeforeDrag = false;
+
+// =====================================================================
+//  参数解析器（AI 代码协议层）
+// =====================================================================
+
 function parseParams(code) {
   const regex = /@param\s*\{\s*(\w+)\s*\}\s+(\w+)\s+([^|]+?)\s*\|\s*range\s*:\s*([\d.]+)\s*~\s*([\d.]+)\s*\|\s*default\s*:\s*([\d.]+)/g;
   const result = [];
@@ -512,7 +829,106 @@ function applyAllConstraints(paramList) {
   }
 }
 
-// ============= 构建渲染函数 =============
+// ============= 调整回写（@adjust 协议） =============
+// 用户在画布上拖拽 / 改补充参数面板，只改到了内置图形的运行时状态，
+// 代码本身毫无变化 —— 此时把代码复制出去，调整就丢了。
+// 所以工作台把调整写成 @adjust 注释行，插入到代码开头的「参数区末尾」
+// （最后一行 @param / @constraint 之后），解析时再读回来：
+//   // @adjust drawBubble[0] offsetX=12, offsetY=-8, tailAngle=-24
+// 这样「代码 = 画面」，复制 / 粘贴 / 分享都不会丢调整；
+// 注意这些行只记录数值，不含任何逻辑，代码结构与调用关系完全不变。
+
+const ADJUST_LINE = /^\s*\/\/\s*@adjust\s/i;
+
+function parseAdjusts(code) {
+  const regex = /@adjust\s+(\w+)\s*\[\s*(\d+)\s*\]\s+([^\n\r]+)/g;
+  const result = [];
+  let match;
+  while ((match = regex.exec(code)) !== null) {
+    const patch = {};
+    match[3].split(',').forEach(pair => {
+      const eq = pair.indexOf('=');
+      if (eq === -1) return;
+      const key = pair.slice(0, eq).trim();
+      const raw = pair.slice(eq + 1).trim();
+      if (!key || raw === '') return;
+      if (raw === 'true') patch[key] = true;
+      else if (raw === 'false') patch[key] = false;
+      else if (!isNaN(Number(raw))) patch[key] = Number(raw);
+      else patch[key] = raw;
+    });
+    result.push({ name: match[1], index: parseInt(match[2], 10), patch });
+  }
+  return result;
+}
+
+// 收集某实例相对默认值发生变化的调整项；AI 已声明的参数由代码自己控制，不回写
+function collectAdjust(item, st, declaredNames) {
+  const parts = [];
+  item.params.forEach(p => {
+    if (declaredNames.has(p.key)) return;
+    const v = st[p.key];
+    if (v === null || v === undefined) return;
+    if (v === item.defaults[p.key]) return;
+    parts.push(`${p.key}=${typeof v === 'string' ? v : String(v)}`);
+  });
+  return parts;
+}
+
+// 把 @adjust 块插到「参数区末尾」—— 最后一行 @param / @constraint 之后；
+// 代码里没有任何参数行时插到最前面。放顶部是为了让用户一眼看见回写结果。
+function insertAdjustBlock(src, block) {
+  const lines = src.split(/\r?\n/);
+  let insertAt = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s*\/\/\s*@(param|constraint)\b/i.test(lines[i])) insertAt = i + 1;
+  }
+  return lines.slice(0, insertAt).concat(block, lines.slice(insertAt)).join('\n');
+}
+
+// 收集当前所有需要回写的调整行（纯数值，不含逻辑）
+function buildAdjustBlock() {
+  const declaredNames = new Set(params.map(p => p.name));
+  const lines = [];
+  BuiltinRegistry.shapes().forEach(item => {
+    item.instances.forEach((st, idx) => {
+      const parts = collectAdjust(item, st, declaredNames);
+      if (parts.length) lines.push(`// @adjust ${item.name}[${idx}] ${parts.join(', ')}`);
+    });
+  });
+  return lines;
+}
+
+// 剥离上一轮工作台写入的 @adjust 行，得到原始的「AI 逻辑代码」
+function stripAdjusts(src) {
+  return src
+    .split(/\r?\n/)
+    .filter(line => !ADJUST_LINE.test(line))
+    .join('\n')
+    .replace(/\s+$/, '');
+}
+
+// 把当前调整状态写回代码框（@adjust 块插到参数区末尾，覆盖上一次生成的块）
+function syncCodeFromState() {
+  const block = buildAdjustBlock();
+  const stripped = stripAdjusts(codeInput.value);
+  const next = block.length ? insertAdjustBlock(stripped, block) + '\n' : stripped + '\n';
+  if (next !== codeInput.value) codeInput.value = next;
+}
+
+// 生成「导出用」的代码：与当前代码逐字相同，只在参数区多了若干条 @adjust
+// 数值行；函数结构、调用关系、表达式全部不变 —— 拖拽只改数值，不改逻辑。
+function buildExportCode() {
+  const block = buildAdjustBlock();
+  const stripped = stripAdjusts(codeInput.value);
+  const body = block.length ? insertAdjustBlock(stripped, block) : stripped;
+  return body + '\n';
+}
+
+// =====================================================================
+//  渲染函数构建：内置函数从注册表动态注入
+// =====================================================================
+
 function buildDrawFrame(code, params) {
   let processedCode = code;
   params.forEach(p => {
@@ -523,13 +939,12 @@ function buildDrawFrame(code, params) {
   const paramValues = params.map(p => p.value);
   const fn = new Function(
     'ctx', 'canvas', 't',
-    'prog', 'fade', 'easeParabola', 'delay', 'sequence', 'easeOutBack', 'easeInOut',
-    'drawBubble',
+    ...BuiltinRegistry.names(),
     ...paramNames,
     processedCode + '\n return drawFrame;'
   );
   try {
-    return fn(ctx, canvas, 0, prog, fade, easeParabola, delay, sequence, easeOutBack, easeInOut, drawBubble, ...paramValues);
+    return fn(ctx, canvas, 0, ...BuiltinRegistry.fns(), ...paramValues);
   } catch (e) {
     statusEl.textContent = '代码执行错误: ' + e.message;
     statusEl.className = 'status error';
@@ -537,7 +952,21 @@ function buildDrawFrame(code, params) {
   }
 }
 
-// ============= UI 更新 =============
+// =====================================================================
+//  UI 更新
+// =====================================================================
+
+// 时间轴右端上限 = 所有时间参数 range 上界的最大值；
+// 没有时间参数时回退到默认 10 秒。这样标记可以铺满整条轴，不留固定空白。
+function updateTimelineMax() {
+  const timeParams = params.filter(p => p.type === 'time');
+  if (timeParams.length === 0) {
+    timeSlider.max = 10;
+    return;
+  }
+  timeSlider.max = Math.max(...timeParams.map(p => p.max));
+}
+
 function updateContentDuration() {
   const timeParams = params.filter(p => p.type === 'time');
   if (timeParams.length === 0) {
@@ -547,6 +976,7 @@ function updateContentDuration() {
   const maxTime = Math.max(...timeParams.map(p => p.value));
   document.getElementById('contentDuration').textContent = `内容时长: ${maxTime.toFixed(2)}s`;
 }
+
 function updateMarkerPosition(paramIndex) {
   const marker = timeMarkerLayer.querySelector(`.time-marker[data-index="${paramIndex}"]`);
   if (!marker) return;
@@ -554,6 +984,7 @@ function updateMarkerPosition(paramIndex) {
   const percent = params[paramIndex].value / timelineMax;
   marker.style.left = (percent * 100) + '%';
 }
+
 function updateParamSlider(index) {
   const sliders = paramPanel.querySelectorAll('.param-slider');
   const labels = paramPanel.querySelectorAll('.param-label .value');
@@ -561,6 +992,7 @@ function updateParamSlider(index) {
   sliders[index].value = params[index].value;
   labels[index].textContent = params[index].value.toFixed(2);
 }
+
 function syncAllParamUI() {
   params.forEach((p, idx) => {
     updateParamSlider(idx);
@@ -569,9 +1001,121 @@ function syncAllParamUI() {
   updateContentDuration();
 }
 
-// ========== 参数面板渲染 ==========
-function renderParamPanel() {
-  paramPanel.innerHTML = '<h3>参数面板</h3>';
+// ---- 内置参数读写（面板统一绑定到每个注册项的实例 0） ----
+
+function readCheckbox(p, inst) {
+  const v = inst[p.key];
+  if (v !== null && v !== undefined) return v;
+  return p.auto ? p.auto(inst) : false;
+}
+
+function paramSliderValue(p, inst) {
+  if (p.enum) {
+    const i = p.enum.indexOf(inst[p.key]);
+    return i < 0 ? 0 : i;
+  }
+  return inst[p.key];
+}
+
+function paramDisplay(p, inst) {
+  const v = inst[p.key];
+  if (p.type === 'checkbox') return readCheckbox(p, inst) ? '开' : '关';
+  if (p.type === 'color') return String(v);
+  if (p.enum) return String(v);
+  if (p.isInt) return String(Math.round(v));
+  return v.toFixed(2);
+}
+
+function builtinDomId(item, p, prefix) {
+  return prefix + item.name + '-' + p.key;
+}
+
+function renderBuiltinParam(item, p, host) {
+  const inst = item.instances[0];
+  const el = document.createElement('div');
+  el.className = 'bubble-param-item';
+
+  const label = document.createElement('div');
+  label.className = 'bubble-param-label';
+  const labelId = builtinDomId(item, p, 'bil-');
+
+  if (p.type === 'checkbox') {
+    const on = !!readCheckbox(p, inst);
+    label.innerHTML = `<span>${p.label}</span><span class="value" id="${labelId}">${on ? '开' : '关'}</span>`;
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.className = 'bubble-param-checkbox';
+    checkbox.checked = on;
+    checkbox.addEventListener('change', () => {
+      inst[p.key] = checkbox.checked;
+      document.getElementById(labelId).textContent = checkbox.checked ? '开' : '关';
+      render();
+    });
+    el.appendChild(label);
+    el.appendChild(checkbox);
+
+  } else if (p.type === 'color') {
+    label.innerHTML = `<span>${p.label}</span><span class="value" id="${labelId}">${inst[p.key]}</span>`;
+    const input = document.createElement('input');
+    input.type = 'color';
+    input.className = 'bubble-param-color';
+    input.id = builtinDomId(item, p, 'bi-');
+    input.value = inst[p.key];
+    input.addEventListener('input', () => {
+      inst[p.key] = input.value;
+      document.getElementById(labelId).textContent = input.value;
+      render();
+    });
+    el.appendChild(label);
+    el.appendChild(input);
+
+  } else {
+    label.innerHTML = `<span>${p.label}</span><span class="value" id="${labelId}">${paramDisplay(p, inst)}</span>`;
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    slider.className = 'bubble-param-slider';
+    slider.id = builtinDomId(item, p, 'bi-');
+    slider.min = p.min;
+    slider.max = p.max;
+    slider.step = p.step || (p.max - p.min) / 100;
+    slider.value = paramSliderValue(p, inst);
+    slider.addEventListener('input', () => {
+      const raw = parseFloat(slider.value);
+      if (p.enum) inst[p.key] = p.enum[raw];
+      else if (p.isInt) inst[p.key] = Math.round(raw);
+      else inst[p.key] = raw;
+      document.getElementById(labelId).textContent = paramDisplay(p, inst);
+      render();
+    });
+    el.appendChild(label);
+    el.appendChild(slider);
+  }
+
+  host.appendChild(el);
+}
+
+// 画布拖拽后反向同步内置面板滑块
+function syncBuiltinSliders() {
+  BuiltinRegistry.shapes().forEach(item => {
+    const inst = item.instances[0];
+    item.params.forEach(p => {
+      const slider = document.getElementById(builtinDomId(item, p, 'bi-'));
+      const label = document.getElementById(builtinDomId(item, p, 'bil-'));
+      if (p.type === 'checkbox') {
+        if (slider) slider.checked = !!readCheckbox(p, inst);
+      } else if (p.type !== 'color' && slider) {
+        slider.value = paramSliderValue(p, inst);
+      }
+      if (label) label.textContent = paramDisplay(p, inst);
+    });
+  });
+}
+
+// =====================================================================
+//  参数面板渲染
+// =====================================================================
+
+function renderAiParamPanel() {
   params.forEach((p, idx) => {
     const item = document.createElement('div');
     item.className = 'param-item';
@@ -603,33 +1147,39 @@ function renderParamPanel() {
     item.appendChild(slider);
     paramPanel.appendChild(item);
   });
+}
 
-  // 追加气泡补充参数面板
+// 按注册表自动生成内置函数分节
+function renderBuiltinPanel() {
   const declaredNames = params.map(p => p.name);
-  const supplementParams = builtinBubbleParams.filter(p => !declaredNames.includes(p.name));
+  const code = codeInput.value;
 
-  if (supplementParams.length > 0) {
+  BuiltinRegistry.shapes().forEach(item => {
+    // 只给「代码里真正调用过」的内置图形生成补充参数分节，避免未使用的图形空占面板
+    if (!new RegExp('\\b' + item.name + '\\s*\\(').test(code)) return;
+    const visible = item.params.filter(p => !declaredNames.includes(p.key));
+    if (visible.length === 0) return;
+
     const panel = document.createElement('div');
     panel.className = 'supplement-panel';
 
     const header = document.createElement('div');
     header.className = 'supplement-header';
-    header.innerHTML = `
-      <span>气泡样式补充参数 <span class="supplement-tip">（代码未指定时生效）</span></span>
-      <span class="supplement-arrow ${bubblePanelCollapsed ? 'collapsed' : ''}">▼</span>
-    `;
+    header.innerHTML =
+      `<span>${item.label || item.name} 补充参数 <span class="supplement-tip">（代码未指定时生效）</span></span>` +
+      `<span class="supplement-arrow ${item.collapsed ? 'collapsed' : ''}">▼</span>`;
+
+    const content = document.createElement('div');
+    content.className = `supplement-content ${item.collapsed ? 'collapsed' : ''}`;
+
     header.addEventListener('click', () => {
-      bubblePanelCollapsed = !bubblePanelCollapsed;
+      item.collapsed = !item.collapsed;
       content.classList.toggle('collapsed');
       header.querySelector('.supplement-arrow').classList.toggle('collapsed');
     });
 
-    const content = document.createElement('div');
-    content.className = `supplement-content ${bubblePanelCollapsed ? 'collapsed' : ''}`;
-    content.id = 'supplementContent';
-
     let currentGroup = '';
-    supplementParams.forEach(p => {
+    visible.forEach(p => {
       if (p.group && p.group !== currentGroup) {
         currentGroup = p.group;
         const groupTitle = document.createElement('div');
@@ -637,74 +1187,19 @@ function renderParamPanel() {
         groupTitle.textContent = currentGroup;
         content.appendChild(groupTitle);
       }
-
-      const item = document.createElement('div');
-      item.className = 'bubble-param-item';
-      item.dataset.name = p.name;
-      const label = document.createElement('div');
-      label.className = 'bubble-param-label';
-
-      if (p.type === 'checkbox') {
-        label.innerHTML = `<span>${p.label}</span><span class="value" id="cb-label-${p.name}">${p.value ? '开' : '关'}</span>`;
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.className = 'bubble-param-checkbox';
-        checkbox.checked = !!p.value;
-        checkbox.addEventListener('change', () => {
-          bubbleDefaults[p.name] = checkbox.checked;
-          document.getElementById(`cb-label-${p.name}`).textContent = checkbox.checked ? '开' : '关';
-          render();
-        });
-        item.appendChild(label);
-        item.appendChild(checkbox);
-      } else {
-        const displayVal = p.isInt ? p.value : p.value.toFixed(2);
-        label.innerHTML = `<span>${p.label}</span><span class="value" id="supp-val-${p.name}">${displayVal}</span>`;
-        const slider = document.createElement('input');
-        slider.type = 'range';
-        slider.className = 'bubble-param-slider';
-        slider.id = `supp-slider-${p.name}`;
-        slider.min = p.min;
-        slider.max = p.max;
-        slider.step = p.step;
-        slider.value = p.value;
-        slider.addEventListener('input', () => {
-          let val = parseFloat(slider.value);
-          if (p.isInt) val = Math.round(val);
-          
-          if (p.target && p.prop) {
-            draggableObjects[p.target][p.prop] = val;
-          } else if (p.enum) {
-            bubbleDefaults[p.name] = p.enum[val];
-          } else {
-            bubbleDefaults[p.name] = val;
-          }
-          
-          document.getElementById(`supp-val-${p.name}`).textContent = p.isInt ? val : val.toFixed(2);
-          render();
-        });
-        item.appendChild(label);
-        item.appendChild(slider);
-      }
-
-      content.appendChild(item);
+      renderBuiltinParam(item, p, content);
     });
 
     panel.appendChild(header);
     panel.appendChild(content);
     paramPanel.appendChild(panel);
-  }
+  });
 }
 
-// ========== 同步尾巴参数滑块 ==========
-function syncTailSliders() {
-  const params = ['tailAngle', 'tailLength', 'tailP1Dist', 'tailP2Dist', 'tailR1', 'tailR2'];
-  params.forEach(name => {
-    const slider = document.getElementById(`supp-slider-${name}`);
-    const label = document.getElementById(`supp-val-${name}`);
-    if (slider) slider.value = bubbleDefaults[name];
-    if (label) label.textContent = Math.round(bubbleDefaults[name]);
-  });
+function renderParamPanel() {
+  paramPanel.innerHTML = '<h3>参数面板</h3>';
+  renderAiParamPanel();
+  renderBuiltinPanel();
 }
 
 function renderTimeMarkers() {
@@ -732,6 +1227,7 @@ function renderTimeMarkers() {
     timeMarkerLayer.appendChild(marker);
   });
 }
+
 function onDragMarker(e) {
   if (draggingIndex === -1) return;
   const layerRect = timeMarkerLayer.getBoundingClientRect();
@@ -746,13 +1242,17 @@ function onDragMarker(e) {
   drawFrame = buildDrawFrame(codeInput.value, params);
   render();
 }
+
 function endDragMarker() {
   draggingIndex = -1;
   document.removeEventListener('mousemove', onDragMarker);
   document.removeEventListener('mouseup', endDragMarker);
 }
 
-// ========== 对象级画布拖拽逻辑 ==========
+// =====================================================================
+//  画布拖拽：通用 hit-test 循环（由注册表句柄驱动，无硬编码对象字典）
+// =====================================================================
+
 function getCanvasMousePos(e) {
   const rect = canvas.getBoundingClientRect();
   const scaleX = canvas.width / rect.width;
@@ -763,136 +1263,62 @@ function getCanvasMousePos(e) {
   };
 }
 
-function pickDraggable(mx, my) {
-  // 优先检测尾巴
-  if (draggableObjects.tail.visible) {
-    const b = draggableObjects.tail.bounds;
-    if (mx >= b.left && mx <= b.right && my >= b.top && my <= b.bottom) {
-      return 'tail';
-    }
-  }
-  // 再检测气泡主体
-  if (draggableObjects.bubble.visible) {
-    const b = draggableObjects.bubble.bounds;
-    if (mx >= b.left && mx <= b.right && my >= b.top && my <= b.bottom) {
-      return 'bubble';
-    }
-  }
-  return null;
-}
-
 canvas.addEventListener('mousedown', (e) => {
   const pos = getCanvasMousePos(e);
-  const target = pickDraggable(pos.x, pos.y);
-  
-  if (target) {
-    draggingTarget = target;
-    dragStartMouseX = pos.x;
-    dragStartMouseY = pos.y;
-    wasPlayingBeforeDrag = playing;
-    if (playing) {
-      playing = false;
-      playBtn.textContent = '播放';
-    }
+  const handle = BuiltinRegistry.pickHandle(pos.x, pos.y);
+  if (!handle) return;
 
-    if (target === 'bubble') {
-      dragStartOffsetX = draggableObjects.bubble.offsetX;
-      dragStartOffsetY = draggableObjects.bubble.offsetY;
-    } else if (target === 'tail') {
-      dragStartTailAngle = bubbleDefaults.tailAngle;
-      dragStartTailLength = bubbleDefaults.tailLength;
-      dragStartP1Dist = bubbleDefaults.tailP1Dist;
-      dragStartP2Dist = bubbleDefaults.tailP2Dist;
-    }
-
-    canvas.classList.add('obj-dragging');
-    e.preventDefault();
+  activeHandle = handle;
+  activeDragCtx = handle.onDown ? handle.onDown(pos) : null;
+  wasPlayingBeforeDrag = playing;
+  if (playing) {
+    playing = false;
+    playBtn.textContent = '播放';
   }
+  canvas.classList.add('obj-dragging');
+  canvas.classList.remove('obj-hover');
+  e.preventDefault();
 });
 
 canvas.addEventListener('mousemove', (e) => {
   const pos = getCanvasMousePos(e);
-  
-  if (draggingTarget === 'bubble') {
-    const dx = Math.round(pos.x - dragStartMouseX);
-    const dy = Math.round(pos.y - dragStartMouseY);
-    draggableObjects.bubble.offsetX = dragStartOffsetX + dx;
-    draggableObjects.bubble.offsetY = dragStartOffsetY + dy;
-    
-    const sliderX = document.getElementById('supp-slider-bubbleX');
-    const sliderY = document.getElementById('supp-slider-bubbleY');
-    const labelX = document.getElementById('supp-val-bubbleX');
-    const labelY = document.getElementById('supp-val-bubbleY');
-    if (sliderX) sliderX.value = draggableObjects.bubble.offsetX;
-    if (sliderY) sliderY.value = draggableObjects.bubble.offsetY;
-    if (labelX) labelX.textContent = draggableObjects.bubble.offsetX;
-    if (labelY) labelY.textContent = draggableObjects.bubble.offsetY;
-    
+
+  if (activeHandle) {
+    if (activeHandle.onMove) activeHandle.onMove(pos, activeDragCtx);
+    syncBuiltinSliders();
     render();
-  } else if (draggingTarget === 'tail') {
-    // 计算鼠标相对于轴线起点的向量
-    const start = draggableObjects.tail.axisStart;
-    const dx = pos.x - start.x;
-    const dy = pos.y - start.y;
-
-    // 计算基准方向的基础角度
-    const tailSide = bubbleDefaults.tailSide;
-    let baseAngle = 0;
-    if (tailSide === 'bottom') baseAngle = Math.PI / 2;
-    if (tailSide === 'top') baseAngle = -Math.PI / 2;
-    if (tailSide === 'left') baseAngle = Math.PI;
-    if (tailSide === 'right') baseAngle = 0;
-
-    // 鼠标方向角度
-    const mouseAngle = Math.atan2(dy, dx);
-    // 相对基准方向的偏移角度
-    let offsetAngle = (mouseAngle - baseAngle) * 180 / Math.PI;
-    // 限制角度范围
-    offsetAngle = Math.max(-80, Math.min(80, offsetAngle));
-    bubbleDefaults.tailAngle = Math.round(offsetAngle);
-
-    // 计算新长度
-    const newLength = Math.hypot(dx, dy);
-    const clampedLength = Math.max(30, Math.min(150, newLength));
-    
-    // 保持两个小圆的相对比例
-    const ratio1 = dragStartP1Dist / dragStartTailLength;
-    const ratio2 = dragStartP2Dist / dragStartTailLength;
-    bubbleDefaults.tailLength = Math.round(clampedLength);
-    bubbleDefaults.tailP1Dist = Math.round(ratio1 * clampedLength);
-    bubbleDefaults.tailP2Dist = Math.round(ratio2 * clampedLength);
-
-    syncTailSliders();
-    render();
-  } else {
-    const hover = pickDraggable(pos.x, pos.y);
-    if (hover) {
-      canvas.classList.add('obj-hover');
-    } else {
-      canvas.classList.remove('obj-hover');
-    }
+    return;
   }
+
+  canvas.classList.toggle('obj-hover', !!BuiltinRegistry.pickHandle(pos.x, pos.y));
 });
 
 canvas.addEventListener('mouseup', () => {
-  if (draggingTarget) {
-    draggingTarget = null;
-    canvas.classList.remove('obj-dragging');
-    if (wasPlayingBeforeDrag) {
-      playing = true;
-      playBtn.textContent = '暂停';
-      lastTime = 0;
-    }
+  if (!activeHandle) return;
+  activeHandle = null;
+  activeDragCtx = null;
+  canvas.classList.remove('obj-dragging');
+  syncCodeFromState(); // 拖动结束：把调整回写进代码
+  if (wasPlayingBeforeDrag) {
+    playing = true;
+    playBtn.textContent = '暂停';
+    lastTime = 0;
   }
 });
 
 canvas.addEventListener('mouseleave', () => {
-  draggingTarget = null;
+  activeHandle = null;
+  activeDragCtx = null;
   canvas.classList.remove('obj-dragging', 'obj-hover');
 });
 
+// =====================================================================
+//  渲染循环
+// =====================================================================
+
 function render() {
   if (!drawFrame) return;
+  BuiltinRegistry.beginFrame();
   try {
     drawFrame(t);
     timeDisplay.textContent = t.toFixed(2) + 's';
@@ -901,6 +1327,7 @@ function render() {
     statusEl.className = 'status error';
   }
 }
+
 function loop(now) {
   if (!lastTime) lastTime = now;
   const delta = (now - lastTime) / 1000;
@@ -914,13 +1341,22 @@ function loop(now) {
   requestAnimationFrame(loop);
 }
 
-// ============= 事件绑定 =============
+// =====================================================================
+//  事件绑定
+// =====================================================================
+
 parseBtn.addEventListener('click', () => {
   const code = codeInput.value;
   params = parseParams(code);
+  // 先把内置图形状态复位为默认值，再应用代码里的 @adjust 行，保证「代码 = 画面」
+  BuiltinRegistry.resetStates();
+  parseAdjusts(code).forEach(a => BuiltinRegistry.setState(a.name, a.index, a.patch));
+  // 时间轴上限跟随时间参数的 range 自适应（须在 renderTimeMarkers 之前调用）
+  updateTimelineMax();
   if (params.length === 0) {
     statusEl.textContent = '未识别到参数，请检查 @param 注释格式';
     statusEl.className = 'status error';
+    paramPanel.innerHTML = '<h3>参数面板</h3>';
     renderParamPanel();
     renderTimeMarkers();
     updateContentDuration();
@@ -941,26 +1377,76 @@ parseBtn.addEventListener('click', () => {
   statusEl.textContent = `成功解析 ${params.length} 个参数${hasWarning ? '（含警告）' : ''}`;
   statusEl.className = 'status';
 });
+
+// 补充参数面板里的任何调整（change 事件冒泡）→ 回写到代码
+paramPanel.addEventListener('change', () => syncCodeFromState());
+
 playBtn.addEventListener('click', () => {
   playing = !playing;
   playBtn.textContent = playing ? '暂停' : '播放';
   lastTime = 0;
 });
+
 timeSlider.addEventListener('input', () => {
   t = parseFloat(timeSlider.value);
   render();
 });
 
-// ============= 默认示例 =============
-const demoCode = `// @param {time} popStart 角色弹出开始时间 | range: 0~8 | default: 0.5
+// =====================================================================
+//  导出当前代码（只反映数值调整，不改逻辑）
+// =====================================================================
+
+const exportModal = document.getElementById('exportModal');
+const exportOutput = document.getElementById('exportOutput');
+const exportCopyBtn = document.getElementById('exportCopyBtn');
+const exportApplyBtn = document.getElementById('exportApplyBtn');
+const exportCloseBtn = document.getElementById('exportCloseBtn');
+
+function openExportModal() {
+  exportOutput.value = buildExportCode();
+  exportModal.classList.add('open');
+}
+
+exportBtn.addEventListener('click', openExportModal);
+exportCloseBtn.addEventListener('click', () => exportModal.classList.remove('open'));
+exportModal.addEventListener('click', (e) => {
+  if (e.target === exportModal) exportModal.classList.remove('open');
+});
+
+exportCopyBtn.addEventListener('click', () => {
+  exportOutput.select();
+  exportOutput.setSelectionRange(0, exportOutput.value.length);
+  try { document.execCommand('copy'); } catch (err) { /* 忽略 */ }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(exportOutput.value).catch(() => {});
+  }
+  exportCopyBtn.textContent = '已复制';
+  setTimeout(() => { exportCopyBtn.textContent = '复制'; }, 1200);
+});
+
+exportApplyBtn.addEventListener('click', () => {
+  codeInput.value = exportOutput.value;
+  exportModal.classList.remove('open');
+  parseBtn.click();
+});
+
+// =====================================================================
+//  默认示例
+// =====================================================================
+
+const demoCode = `// @param {time} popStart 角色弹出开始时间 | range: 0~8 | default: 0
 // @param {time} popEnd 角色弹出结束时间 | range: 0~8 | default: 1.2
 // @param {time} bubbleDelay 气泡延迟出现时间 | range: 0~8 | default: 1.5
+// @param {time} starStart 星星弹出时间 | range: 0~8 | default: 1.9
 // @param {number} bubbleSize 气泡大小 | range: 80~220 | default: 140
+// @param {number} starSize 星星大小 | range: 60~160 | default: 96
 // @param {number} cloudWidth 云朵横向宽度 | range: 0.7~1.4 | default: 1.0
 // @param {number} cloudHeight 云朵纵向高度 | range: 0.6~1.2 | default: 1.0
 // @param {number} bumpHeight 云朵凸起幅度 | range: 0.15~0.4 | default: 0.25
 // @param {number} bumpCount 云朵瓣数 | range: 5~12 | default: 7
 // @constraint popEnd >= popStart
+// @adjust drawBubble[0] offsetX=-66, offsetY=-36, tailAngle=-42, tailSize=0.79
+// @adjust drawStarburst[0] offsetX=-465, offsetY=-130
 function drawFrame(t) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   const charX = canvas.width / 2;
@@ -969,30 +1455,36 @@ function drawFrame(t) {
   const charHalf = charSize / 2;
   const charProg = prog(t, popStart, popEnd);
   const charScale = easeOutBack(charProg);
-  ctx.save();
-  ctx.translate(charX, charY);
-  ctx.scale(charScale, charScale);
-  ctx.fillStyle = '#ff8822';
-  ctx.fillRect(-charHalf, -charHalf, charSize, charSize);
-  ctx.strokeStyle = '#333';
-  ctx.lineWidth = 3;
-  ctx.strokeRect(-charHalf, -charHalf, charSize, charSize);
-  ctx.fillStyle = '#fff';
-  ctx.beginPath();
-  ctx.arc(-22, -18, 10, 0, Math.PI * 2);
-  ctx.arc(22, -18, 10, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#222';
-  ctx.beginPath();
-  ctx.arc(-22, -18, 4.5, 0, Math.PI * 2);
-  ctx.arc(22, -18, 4.5, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#ff8822';
-  ctx.fillRect(-28, charHalf - 8, 18, 28);
-  ctx.fillRect(10, charHalf - 8, 18, 28);
-  ctx.strokeRect(-28, charHalf - 8, 18, 28);
-  ctx.strokeRect(10, charHalf - 8, 18, 28);
-  ctx.restore();
+  // 角色方块原本是用原生 API 直接画的，没有拖拽句柄；包进 drawGroup 后即可整块拖动
+  drawGroup(ctx, charX, charY, {
+    width: charSize,
+    height: charSize + 40,
+    content: (c) => {
+      c.save();
+      c.scale(charScale, charScale);
+      c.fillStyle = '#ff8822';
+      c.fillRect(-charHalf, -charHalf, charSize, charSize);
+      c.strokeStyle = '#333';
+      c.lineWidth = 3;
+      c.strokeRect(-charHalf, -charHalf, charSize, charSize);
+      c.fillStyle = '#fff';
+      c.beginPath();
+      c.arc(-22, -18, 10, 0, Math.PI * 2);
+      c.arc(22, -18, 10, 0, Math.PI * 2);
+      c.fill();
+      c.fillStyle = '#222';
+      c.beginPath();
+      c.arc(-22, -18, 4.5, 0, Math.PI * 2);
+      c.arc(22, -18, 4.5, 0, Math.PI * 2);
+      c.fill();
+      c.fillStyle = '#ff8822';
+      c.fillRect(-28, charHalf - 8, 18, 28);
+      c.fillRect(10, charHalf - 8, 18, 28);
+      c.strokeRect(-28, charHalf - 8, 18, 28);
+      c.strokeRect(10, charHalf - 8, 18, 28);
+      c.restore();
+    }
+  });
 
   const bubbleT = delay(t, bubbleDelay);
   const bubbleProg = prog(bubbleT, 0, 0.55);
@@ -1007,9 +1499,28 @@ function drawFrame(t) {
     cloudWidth: cloudWidth,
     cloudHeight: cloudHeight,
     bumpHeight: bumpHeight,
-    bumpCount: bumpCount
+    bumpCount: bumpCount,
+    showDots: false,
+    content: (c, size) => {
+      c.fillStyle = '#333333';
+      c.font = 'bold ' + Math.round(size * 0.16) + 'px sans-serif';
+      c.textAlign = 'center';
+      c.textBaseline = 'middle';
+      c.fillText('你好呀！', 0, 0);
+    }
   });
   ctx.restore();
+
+  const starProg = prog(delay(t, starStart), 0, 0.45);
+  if (starProg > 0) {
+    const starScale = easeOutBack(starProg);
+    ctx.save();
+    ctx.translate(charX + 150, charY - 170);
+    ctx.rotate((1 - starProg) * -0.9);
+    ctx.scale(starScale, starScale);
+    drawStarburst(ctx, 0, 0, starSize);
+    ctx.restore();
+  }
 }`;
 
 codeInput.value = demoCode;
